@@ -28,6 +28,7 @@ namespace SANJET.Core.ViewModels
         private readonly ILogger<HomeViewModel> _logger;
         private readonly MainViewModel? _mainViewModel;
         private readonly IAudioService _audioService;
+        private readonly ILineNotificationService? _lineNotificationService;
 
         // 暴露 DbContext 供 DeviceViewModel 使用
         public AppDbContext DbContext => _dbContext;
@@ -63,11 +64,13 @@ namespace SANJET.Core.ViewModels
         public HomeViewModel(
             AppDbContext dbContext, 
             ILogger<HomeViewModel> logger,
-            IAudioService audioService)
+            IAudioService audioService,
+            ILineNotificationService? lineNotificationService = null)
         {
             _dbContext = dbContext;
             _logger = logger;
             _audioService = audioService;
+            _lineNotificationService = lineNotificationService;
             _mainViewModel = App.Host?.Services.GetService<MainViewModel>();
         }
 
@@ -104,7 +107,7 @@ namespace SANJET.Core.ViewModels
                 .ToListAsync();
             foreach (var deviceEntity in devicesFromDb)
             {
-                var deviceVm = new DeviceViewModel(this, _mainViewModel, _logger, _audioService)
+                var deviceVm = new DeviceViewModel(this, _mainViewModel, _logger, _audioService, _lineNotificationService)
                 {
                     Id = deviceEntity.Id,
                     Name = deviceEntity.Name,
@@ -113,6 +116,8 @@ namespace SANJET.Core.ViewModels
                     Status = deviceEntity.IsOperational ? deviceEntity.Status : IdleStatus,
                     IsOperational = deviceEntity.IsOperational,
                     RunCount = deviceEntity.RunCount,
+                    TargetRunCount = deviceEntity.TargetRunCount,
+                    AutoStopOnTarget = deviceEntity.AutoStopOnTarget,
                     IsEditingName = false,
                     ControllingEsp32MqttId = deviceEntity.ControllingEsp32MqttId,
                     Area = deviceEntity.Area,
@@ -537,6 +542,7 @@ namespace SANJET.Core.ViewModels
                 if (runCountChanged)
                 {
                     deviceToUpdate.RunCount = newRunCountFromDb;
+                    _ = deviceToUpdate.HandleAutoStopOnTargetAsync();
                 }
 
                 if (statusChanged || runCountChanged)
@@ -641,6 +647,7 @@ namespace SANJET.Core.ViewModels
         private readonly MainViewModel? _mainViewModel;
         private readonly ILogger? _logger;
         private readonly IAudioService? _audioService;
+        private readonly ILineNotificationService? _lineNotificationService;
 
         [ObservableProperty]
         private int id;
@@ -668,6 +675,12 @@ namespace SANJET.Core.ViewModels
         private int runCount;
 
         [ObservableProperty]
+        private int? targetRunCount;
+
+        [ObservableProperty]
+        private bool autoStopOnTarget;
+
+        [ObservableProperty]
         private bool isEditingName = false;
 
         [ObservableProperty]
@@ -688,12 +701,22 @@ namespace SANJET.Core.ViewModels
         [ObservableProperty]
         private string editingRunCountText = string.Empty; // 編輯時的 RunCount 文本
 
-        public DeviceViewModel(HomeViewModel homeViewModel, MainViewModel? mainViewModel, ILogger? logger, IAudioService? audioService)
+        [ObservableProperty]
+        private string editingTargetRunCountText = string.Empty;
+
+        [ObservableProperty]
+        private bool isEditingTargetRunCount = false;
+
+        [ObservableProperty]
+        private bool isAutoStopping = false;
+
+        public DeviceViewModel(HomeViewModel homeViewModel, MainViewModel? mainViewModel, ILogger? logger, IAudioService? audioService, ILineNotificationService? lineNotificationService)
         {
             _homeViewModel = homeViewModel;
             _mainViewModel = mainViewModel;
             _logger = logger;
             _audioService = audioService; // <--- 儲存服務
+            _lineNotificationService = lineNotificationService;
         }
 
         public DeviceViewModel()
@@ -702,6 +725,7 @@ namespace SANJET.Core.ViewModels
             _mainViewModel = App.Host?.Services.GetService<MainViewModel>();
             _logger = App.Host?.Services.GetService<ILogger<DeviceViewModel>>();
             _audioService = App.Host?.Services.GetService<IAudioService>(); 
+            _lineNotificationService = App.Host?.Services.GetService<ILineNotificationService>();
         }
 
         partial void OnIsOperationalChanged(bool value)
@@ -948,6 +972,97 @@ namespace SANJET.Core.ViewModels
         {
             IsEditingRunCount = false;
             EditingRunCountText = string.Empty;
+        }
+
+        [RelayCommand]
+        private void EditTargetRunCount()
+        {
+            EditingTargetRunCountText = TargetRunCount?.ToString() ?? string.Empty;
+            IsEditingTargetRunCount = true;
+        }
+
+        [RelayCommand]
+        private async Task SaveTargetRunCountAsync()
+        {
+            var text = EditingTargetRunCountText?.Trim() ?? string.Empty;
+            int? newTarget = null;
+            if (!string.IsNullOrEmpty(text))
+            {
+                if (!int.TryParse(text, out var parsed) || parsed < 0)
+                {
+                    MessageBox.Show("目標次數請輸入空白或非負整數。", "輸入錯誤", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                newTarget = parsed;
+            }
+
+            TargetRunCount = newTarget;
+            AutoStopOnTarget = newTarget.HasValue;
+            IsEditingTargetRunCount = false;
+            await PersistTargetRunCountSettingsAsync();
+            Status = AutoStopOnTarget ? $"已設定目標次數 {TargetRunCount}" : "已清除目標次數";
+        }
+
+        [RelayCommand]
+        private void CancelEditTargetRunCount()
+        {
+            IsEditingTargetRunCount = false;
+            EditingTargetRunCountText = string.Empty;
+        }
+
+        public async Task HandleAutoStopOnTargetAsync()
+        {
+            if (IsAutoStopping || !AutoStopOnTarget || !TargetRunCount.HasValue)
+            {
+                return;
+            }
+
+            if (RunCount < TargetRunCount.Value || !(Status == "運行中" || Status.Contains("啟動中")))
+            {
+                return;
+            }
+
+            IsAutoStopping = true;
+            try
+            {
+                _logger?.LogInformation("設備 '{DeviceName}' 已達目標次數 {TargetRunCount}，自動觸發停止。", Name, TargetRunCount.Value);
+                await StopAsync();
+                AutoStopOnTarget = false;
+                await PersistTargetRunCountSettingsAsync();
+
+                if (_lineNotificationService != null && _lineNotificationService.IsConfigured)
+                {
+                    var message = $"✅ 設備自動停止通知\n\n設備：{Name}\nESP32：{ControllingEsp32MqttId ?? "未設定"}\nSlave：{SlaveId}\n目前次數：{RunCount}\n目標次數：{TargetRunCount}";
+                    await _lineNotificationService.SendTextMessageAsync(message);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "設備 '{DeviceName}' 自動停止或 LINE 通知失敗。", Name);
+            }
+            finally
+            {
+                IsAutoStopping = false;
+            }
+        }
+
+        private async Task PersistTargetRunCountSettingsAsync()
+        {
+            if (_homeViewModel?.DbContext?.Devices == null)
+            {
+                return;
+            }
+
+            var deviceInDb = await _homeViewModel.DbContext.Devices.FindAsync(Id);
+            if (deviceInDb == null)
+            {
+                return;
+            }
+
+            deviceInDb.TargetRunCount = TargetRunCount;
+            deviceInDb.AutoStopOnTarget = AutoStopOnTarget;
+            deviceInDb.Timestamp = DateTime.UtcNow;
+            await _homeViewModel.DbContext.SaveChangesAsync();
         }
 
         [RelayCommand]
