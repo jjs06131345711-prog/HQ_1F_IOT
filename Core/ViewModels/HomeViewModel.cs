@@ -693,6 +693,7 @@ namespace SANJET.Core.ViewModels
         private int modbusDeviceIndex = ModbusAddressMapping.DefaultDeviceIndex;
 
         public string SlaveIdDisplayText =>
+            ModbusAddressMapping.IsTestArea(Area)
             Area == TestAreaName
                 ? $"從站 ID：{SlaveId}（設備編號：{ModbusDeviceIndex}）"
                 : $"從站 ID：{SlaveId}";
