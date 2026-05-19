@@ -325,6 +325,22 @@ namespace SANJET
                     await alterModbusDeviceIndexCommand.ExecuteNonQueryAsync();
                     logger.LogInformation("已為既有 Devices 資料表新增 ModbusDeviceIndex 欄位，預設為 1。");
                 }
+
+                if (!existingColumns.Contains("TargetRunCount"))
+                {
+                    await using var alterTargetRunCountCommand = connection.CreateCommand();
+                    alterTargetRunCountCommand.CommandText = "ALTER TABLE Devices ADD COLUMN TargetRunCount INTEGER NULL;";
+                    await alterTargetRunCountCommand.ExecuteNonQueryAsync();
+                    logger.LogInformation("已為既有 Devices 資料表新增 TargetRunCount 欄位。");
+                }
+
+                if (!existingColumns.Contains("AutoStopOnTarget"))
+                {
+                    await using var alterAutoStopOnTargetCommand = connection.CreateCommand();
+                    alterAutoStopOnTargetCommand.CommandText = "ALTER TABLE Devices ADD COLUMN AutoStopOnTarget INTEGER NOT NULL DEFAULT 0;";
+                    await alterAutoStopOnTargetCommand.ExecuteNonQueryAsync();
+                    logger.LogInformation("已為既有 Devices 資料表新增 AutoStopOnTarget 欄位，預設為 false。");
+                }
             }
             finally
             {
