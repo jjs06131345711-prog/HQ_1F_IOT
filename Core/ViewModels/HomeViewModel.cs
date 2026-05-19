@@ -692,6 +692,11 @@ namespace SANJET.Core.ViewModels
         [ObservableProperty]
         private int modbusDeviceIndex = ModbusAddressMapping.DefaultDeviceIndex;
 
+        public string SlaveIdDisplayText =>
+            ModbusAddressMapping.IsTestArea(Area)
+                ? $"從站 ID：{SlaveId}（設備編號：{ModbusDeviceIndex}）"
+                : $"從站 ID：{SlaveId}";
+
         private const ushort MODBUS_VALUE_START = 1;
         private const ushort MODBUS_VALUE_STOP = 0;
 
@@ -739,6 +744,21 @@ namespace SANJET.Core.ViewModels
             {
                 _ = _homeViewModel.SaveChangesToDeviceAsync(this);
             }
+        }
+
+        partial void OnSlaveIdChanged(int value)
+        {
+            OnPropertyChanged(nameof(SlaveIdDisplayText));
+        }
+
+        partial void OnAreaChanged(string value)
+        {
+            OnPropertyChanged(nameof(SlaveIdDisplayText));
+        }
+
+        partial void OnModbusDeviceIndexChanged(int value)
+        {
+            OnPropertyChanged(nameof(SlaveIdDisplayText));
         }
 
         [RelayCommand]

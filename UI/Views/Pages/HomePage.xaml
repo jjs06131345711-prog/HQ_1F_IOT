@@ -326,7 +326,7 @@
                                 </StackPanel>
 
                                 <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding ControllingEsp32MqttId, StringFormat=ESP32 ID：{0}}"/>
-                                <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding SlaveId, StringFormat=從站 ID：{0}}"/>
+                                <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding SlaveIdDisplayText}"/>
                                 <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding RunCount, StringFormat=跑合：{0}}"/>
                                 <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding TargetRunCount, StringFormat=目標次數：{0}}"/>
                                 <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding Status, StringFormat=狀態：{0}}" FontWeight="Bold" Foreground="DarkSlateBlue"/>
