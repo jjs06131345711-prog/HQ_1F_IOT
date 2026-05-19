@@ -1052,7 +1052,13 @@ namespace SANJET.Core.ViewModels
 
                 if (_lineNotificationService != null && _lineNotificationService.IsConfigured)
                 {
-                    var message = $"✅ 設備自動停止通知\n\n設備：{Name}\nESP32：{ControllingEsp32MqttId ?? "未設定"}\nSlave：{SlaveId}\n目前次數：{RunCount}\n目標次數：{TargetRunCount}";
+                    var message = 
+                        $"✅ 設備自動停止通知\n\n" +
+                        $"設備：{Name}\n" +
+                        $"ESP32：{ControllingEsp32MqttId ?? "未設定"}\n" +
+                        $"Slave：{SlaveId}\n目前次數：{RunCount}\n" +
+                        $"目標次數：{TargetRunCount}";
+
                     await _lineNotificationService.SendTextMessageAsync(message);
                 }
             }

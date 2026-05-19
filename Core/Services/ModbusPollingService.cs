@@ -19,7 +19,7 @@ namespace SANJET.Core.Services
         private readonly ILogger<ModbusPollingService> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly IPollingStateService _pollingStateService; // 新增
-        private readonly TimeSpan _pollingInterval = TimeSpan.FromSeconds(5);//--輪巡時間--// 預設為 5 秒
+        private readonly TimeSpan _pollingInterval = TimeSpan.FromSeconds(3);//--輪巡時間--// 預設為 3 秒
         private readonly ManualResetEventSlim _pollingSignal = new ManualResetEventSlim(false); // 新增，初始為未發信號
 
         public ModbusPollingService(ILogger<ModbusPollingService> logger,
@@ -150,7 +150,7 @@ namespace SANJET.Core.Services
                                 );
 
                                 //單筆輪尋間隔時間
-                                await Task.Delay(TimeSpan.FromMilliseconds(2000), stoppingToken);
+                                await Task.Delay(TimeSpan.FromMilliseconds(500), stoppingToken);
 
                                 if (stoppingToken.IsCancellationRequested) break;
 
