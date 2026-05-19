@@ -11,6 +11,8 @@ namespace SANJET.Core.Models
         public string Status { get; set; } = "閒置"; // 預設狀態
         public bool IsOperational { get; set; } = true; // 預設為可操作
         public int RunCount { get; set; } = 0; // 預設運轉次數
+        public int? TargetRunCount { get; set; } // 目標運轉次數，null 表示未啟用
+        public bool AutoStopOnTarget { get; set; } = false; // 到達目標次數後自動停止
         public DateTime Timestamp { get; set; }
 
         // 所屬區域：展機區或測試區。
