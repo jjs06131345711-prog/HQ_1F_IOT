@@ -4,9 +4,9 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using SANJET.Core.Constants;
 using SANJET.Core.Interfaces;
 using SANJET.Core.Models;
-using SANJET.Core.Constants;
 using SANJET.Core.Services;
 using SANJET.UI.Views.Windows;
 using System;
@@ -15,6 +15,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Xml.Linq;
 
 namespace SANJET.Core.ViewModels
 {
@@ -198,6 +199,85 @@ namespace SANJET.Core.ViewModels
             SelectedAreaDescription = "請先點選平面圖上的區域。";
             SelectedAreaDevices = new ObservableCollection<DeviceViewModel>();
             OnPropertyChanged(nameof(ShowSelectedAreaEmptyMessage));
+        }
+
+        [RelayCommand]
+        private async Task StartAllDevicesAsync()
+        {
+            var devicesToStart = SelectedAreaDevices
+                .Where(device => device.StartCommand.CanExecute(null))
+                .ToList();
+
+            var result = MessageBox.Show(
+                $"確定要啟動區域 '{SelectedAreaName}' 的所有設備嗎？\n\n此操作會對 {devicesToStart.Count} 台設備發送啟動命令。",
+                "確認一鍵全部啟動",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result != MessageBoxResult.Yes)
+            {
+                _logger.LogInformation("使用者取消一鍵全部啟動區域 {AreaName} 的設備。", SelectedAreaName);
+                return;
+            }
+
+            if (!devicesToStart.Any())
+            {
+                _logger.LogInformation("一鍵全部啟動：目前區域 {AreaName} 沒有可啟動的設備。", SelectedAreaName);
+                return;
+            }
+
+            _logger.LogInformation("一鍵全部啟動：準備啟動區域 {AreaName} 的 {Count} 台設備。", SelectedAreaName, devicesToStart.Count);
+
+            foreach (var device in devicesToStart)
+            {
+                try
+                {
+                    await device.StartCommand.ExecuteAsync(null);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "一鍵全部啟動：設備 {DeviceName} 啟動時發生例外。", device.Name);
+                }
+            }
+        }
+
+        [RelayCommand]
+        private async Task StopAllDevicesAsync()
+        {
+            var devicesToStop = SelectedAreaDevices
+                .Where(device => device.StopCommand.CanExecute(null))
+                .ToList();
+
+            var result = MessageBox.Show(
+                $"確定要停止區域 '{SelectedAreaName}' 的所有設備嗎？\n\n此操作會對 {devicesToStop.Count} 台設備發送停止命令。",
+                "確認一鍵全部停止",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            
+            if (result != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            if (!devicesToStop.Any())
+            {
+                _logger.LogInformation("一鍵全部停止：目前區域 {AreaName} 沒有可停止的設備。", SelectedAreaName);
+                return;
+            }
+
+            _logger.LogInformation("一鍵全部停止：準備停止區域 {AreaName} 的 {Count} 台設備。", SelectedAreaName, devicesToStop.Count);
+
+            foreach (var device in devicesToStop)
+            {
+                try
+                {
+                    await device.StopCommand.ExecuteAsync(null);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "一鍵全部停止：設備 {DeviceName} 停止時發生例外。", device.Name);
+                }
+            }
         }
 
         /// <summary>

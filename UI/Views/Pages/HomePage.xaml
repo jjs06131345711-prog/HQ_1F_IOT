@@ -59,6 +59,16 @@
             <Setter Property="Height" Value="32"/>
         </Style>
 
+        <Style x:Key="DeleteIconButtonStyle" TargetType="Button" BasedOn="{StaticResource EditNameBTStyle}">
+            <Setter Property="Background" Value="#B91C1C"/>
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+        </Style>
+
         <!-- 紀錄按鈕樣式 -->
         <Style x:Key="RecordButtonStyle" TargetType="Button" BasedOn="{StaticResource EditNameBTStyle}">
             <Setter Property="Background" Value="#2196F3"/>
@@ -211,6 +221,28 @@
                     Background="#4F6472"
                     Foreground="White"
                     FontWeight="Bold"/>
+            <StackPanel DockPanel.Dock="Left"
+                        Orientation="Horizontal"
+                        Visibility="{
+                        Binding CanControlDevice,
+                        Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Button Content="全部啟動"
+                        Width="100"
+                        Height="38"
+                        Margin="0,0,8,0"
+                        Command="{Binding StartAllDevicesCommand}"
+                        Background="#4CAF50"
+                        Foreground="White"
+                        FontWeight="Bold"/>
+                <Button Content="全部停止"
+                        Width="100"
+                        Height="38"
+                        Margin="0,0,16,0"
+                        Command="{Binding StopAllDevicesCommand}"
+                        Background="#F44336"
+                        Foreground="White"
+                        FontWeight="Bold"/>
+            </StackPanel>
             <!-- 添加設備按鈕（測試區） -->
             <Button Content="添加設備"
                     DockPanel.Dock="Right"
@@ -285,7 +317,19 @@
                                 </Style>
                             </Border.Style>
 
-                            <StackPanel>
+                            <Grid>
+                                <Button Content="X"
+                                        Command="{Binding DeleteCommand}"
+                                        Style="{StaticResource DeleteIconButtonStyle}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Top"
+                                        ToolTip="刪除設備"
+                                        Visibility="{
+                                        Binding DataContext.CanControlDevice,
+                                        RelativeSource={RelativeSource AncestorType=Page},
+                                        Converter={StaticResource BooleanToVisibilityConverter}}"/>
+
+                                <StackPanel Margin="0,24,0,0">
                                 <!-- 設備是否正常運作的選擇控件 -->
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,5" 
                                 Visibility="{
@@ -381,15 +425,24 @@
                                 </StackPanel>
 
                                 <!-- 編輯按鈕 -->
-                                <Button Content="修改運轉次數" 
-                                    Command="{Binding EditRunCountCommand}" 
-                                    CommandParameter="{Binding SlaveId}"
-                                    Style="{StaticResource EditButtonStyle}"
-                                    Width="120"
-                                    Margin="0,5,0,0"
-                                    HorizontalAlignment="Center"
-                                    Visibility="{Binding IsEditingRunCount, Converter={StaticResource BooleanInverterConverter}}"
-                                    IsEnabled="{Binding DataContext.CanControlDevice, RelativeSource={RelativeSource AncestorType=Page}}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,0" HorizontalAlignment="Center">
+                                    <Button Content="修改運轉次數" 
+                                        Command="{Binding EditRunCountCommand}" 
+                                        CommandParameter="{Binding SlaveId}"
+                                        Style="{StaticResource EditButtonStyle}"
+                                        Width="120"
+                                        Margin="0"
+                                        Visibility="{Binding IsEditingRunCount, Converter={StaticResource BooleanInverterConverter}}"
+                                        IsEnabled="{Binding DataContext.CanControlDevice, RelativeSource={RelativeSource AncestorType=Page}}"/>
+
+                                    <Button Content="設定目標次數"
+                                            Command="{Binding EditTargetRunCountCommand}"
+                                            Style="{StaticResource EditButtonStyle}"
+                                            Width="120"
+                                            Margin="8,0,0,0"
+                                            Visibility="{Binding IsEditingTargetRunCount, Converter={StaticResource BooleanInverterConverter}}"
+                                            IsEnabled="{Binding DataContext.CanControlDevice, RelativeSource={RelativeSource AncestorType=Page}}"/>
+                                </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,5"
                                 Visibility="{Binding IsEditingTargetRunCount, Converter={StaticResource BooleanToVisibilityConverter}}"
@@ -399,26 +452,9 @@
                                     <Button Content="確認" Command="{Binding SaveTargetRunCountCommand}" Style="{StaticResource SaveButtonStyle}"/>
                                     <Button Content="取消" Command="{Binding CancelEditTargetRunCountCommand}" Style="{StaticResource CancelButtonStyle}"/>
                                 </StackPanel>
-                                <Button Content="設定目標次數"
-                                        Command="{Binding EditTargetRunCountCommand}"
-                                        Style="{StaticResource EditButtonStyle}"
-                                        Width="120"
-                                        Margin="0,5,0,0"
-                                        HorizontalAlignment="Center"
-                                        Visibility="{Binding IsEditingTargetRunCount, Converter={StaticResource BooleanInverterConverter}}"
-                                        IsEnabled="{Binding DataContext.CanControlDevice, RelativeSource={RelativeSource AncestorType=Page}}"/>
 
-                                <!-- 刪除設備按鈕 -->
-                                <Button Content="刪除設備"
-                                         Command="{Binding DeleteCommand}"
-                                         Style="{StaticResource DeleteButtonStyle}"
-                                         Margin="0,10,0,0"
-                                         HorizontalAlignment="Center"
-                                         Visibility="{
-                                         Binding DataContext.CanControlDevice,
-                                         RelativeSource={RelativeSource AncestorType=Page},
-                                         Converter={StaticResource BooleanToVisibilityConverter}}"/>
-                            </StackPanel>
+                                </StackPanel>
+                            </Grid>
 
                         </Border>
                     </DataTemplate>
