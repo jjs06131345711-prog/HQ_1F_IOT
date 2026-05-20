@@ -86,8 +86,8 @@ bool ota_started = false;
 #define MAX_SLAVES 11
 
 // 建議先使用較短 timeout，避免 Modbus 從站無回應時拖太久
-#define MODBUS_TIMEOUT_MS 300
-#define MODBUS_RETRIES 2
+#define MODBUS_TIMEOUT_MS 200
+#define MODBUS_RETRIES 3
 
 int Address_Offset = 7000;
 ModbusMaster node;

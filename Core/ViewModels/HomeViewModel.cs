@@ -694,7 +694,6 @@ namespace SANJET.Core.ViewModels
 
         public string SlaveIdDisplayText =>
             ModbusAddressMapping.IsTestArea(Area)
-            Area == TestAreaName
                 ? $"從站 ID：{SlaveId}（設備編號：{ModbusDeviceIndex}）"
                 : $"從站 ID：{SlaveId}";
 
@@ -1054,7 +1053,7 @@ namespace SANJET.Core.ViewModels
                 if (_lineNotificationService != null && _lineNotificationService.IsConfigured)
                 {
                     var message = 
-                        $"✅ 設備自動停止通知\n\n" +
+                        $"✅ 目標次數完成通知\n\n" +
                         $"設備：{Name}\n" +
                         $"ESP32：{ControllingEsp32MqttId ?? "未設定"}\n" +
                         $"Slave：{SlaveId}\n目前次數：{RunCount}\n" +
