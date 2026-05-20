@@ -675,6 +675,7 @@ namespace SANJET.Core.ViewModels
         private int runCount;
 
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(HasTargetRunCount))]
         private int? targetRunCount;
 
         [ObservableProperty]
@@ -692,9 +693,10 @@ namespace SANJET.Core.ViewModels
         [ObservableProperty]
         private int modbusDeviceIndex = ModbusAddressMapping.DefaultDeviceIndex;
 
+        public bool HasTargetRunCount => TargetRunCount.HasValue;
+
         public string SlaveIdDisplayText =>
             ModbusAddressMapping.IsTestArea(Area)
-            Area == TestAreaName
                 ? $"從站 ID：{SlaveId}（設備編號：{ModbusDeviceIndex}）"
                 : $"從站 ID：{SlaveId}";
 
@@ -1018,10 +1020,13 @@ namespace SANJET.Core.ViewModels
             }
 
             TargetRunCount = newTarget;
-            AutoStopOnTarget = newTarget.HasValue;
+            if (!newTarget.HasValue)
+            {
+                AutoStopOnTarget = false;
+            }
             IsEditingTargetRunCount = false;
             await PersistTargetRunCountSettingsAsync();
-            Status = AutoStopOnTarget ? $"已設定目標次數 {TargetRunCount}" : "已清除目標次數";
+            Status = newTarget.HasValue ? $"已設定目標次數 {TargetRunCount}" : "已清除目標次數";
         }
 
         [RelayCommand]
@@ -1029,6 +1034,20 @@ namespace SANJET.Core.ViewModels
         {
             IsEditingTargetRunCount = false;
             EditingTargetRunCountText = string.Empty;
+        }
+
+        [RelayCommand]
+        private async Task SaveAutoStopOnTargetAsync()
+        {
+            if (AutoStopOnTarget && !TargetRunCount.HasValue)
+            {
+                AutoStopOnTarget = false;
+                MessageBox.Show("請先設定目標次數，再啟用達目標自動停止。", "目標次數未設定", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            await PersistTargetRunCountSettingsAsync();
+            Status = AutoStopOnTarget ? "已啟用達目標自動停止" : "已停用達目標自動停止";
         }
 
         public async Task HandleAutoStopOnTargetAsync()
