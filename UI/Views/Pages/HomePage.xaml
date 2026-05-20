@@ -329,6 +329,13 @@
                                 <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding SlaveIdDisplayText}"/>
                                 <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding RunCount, StringFormat=跑合：{0}}"/>
                                 <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding TargetRunCount, StringFormat=目標次數：{0}}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                    <TextBlock Text="達目標自動停止:" Style="{StaticResource MyTextBlockStyle}"/>
+                                    <CheckBox IsChecked="{Binding AutoStopOnTarget, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              Command="{Binding SaveAutoStopOnTargetCommand}"
+                                              Style="{StaticResource MyCheckBoxStyle}"
+                                              IsEnabled="{Binding DataContext.CanControlDevice, RelativeSource={RelativeSource AncestorType=Page}}"/>
+                                </StackPanel>
                                 <TextBlock Style="{StaticResource MyTextBlockStyle}" Text="{Binding Status, StringFormat=狀態：{0}}" FontWeight="Bold" Foreground="DarkSlateBlue"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,15,0,0" HorizontalAlignment="Center"
                                 Visibility="{
