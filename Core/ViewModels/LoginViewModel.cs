@@ -28,8 +28,8 @@ namespace SANJET.Core.ViewModels
             Password = string.Empty;
 
             // 在這裡設定預設的帳號和密碼
-            Username = "administrator"; // 或 "admin", "user" 等您在 SeedData 中設定的帳號
-            Password = "sanjet25653819"; // 對應 "administrator" 的密碼
+            Username = "user"; // 或 "admin", "user" 等您在 SeedData 中設定的帳號
+            Password = "0000"; // 對應的密碼
 
             
             ErrorMessage = string.Empty;

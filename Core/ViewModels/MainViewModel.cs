@@ -590,14 +590,14 @@ namespace SANJET.Core.ViewModels
                                   currentUserObject.PermissionsList.Contains(Permission.All.ToString());
                 CanAll = currentUserObject.PermissionsList.Contains(Permission.All.ToString());
 
-                if (CanControlDevice)
+                if (CanViewHome)
                 {
-                    _logger.LogInformation("用戶已登入且擁有足夠權限。正在啟用 Modbus 輪詢。");
+                    _logger.LogInformation("用戶已登入且擁有首頁檢視權限。正在啟用 Modbus 輪詢以更新設備狀態與運轉次數。");
                     _pollingStateService.EnablePolling();
                 }
                 else
                 {
-                    _logger.LogInformation("用戶已登入，但缺少 Modbus 輪詢權限。輪詢將保持禁用狀態。");
+                    _logger.LogInformation("用戶已登入，但缺少首頁檢視權限。輪詢將保持禁用狀態。");
                     _pollingStateService.DisablePolling();
                 }
 

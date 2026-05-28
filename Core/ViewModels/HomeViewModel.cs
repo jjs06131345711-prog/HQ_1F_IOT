@@ -622,7 +622,7 @@ namespace SANJET.Core.ViewModels
                 if (runCountChanged)
                 {
                     deviceToUpdate.RunCount = newRunCountFromDb;
-                    _ = deviceToUpdate.HandleAutoStopOnTargetAsync();
+                    _ = deviceToUpdate.HandleTargetRunCountReachedAsync(oldRunCount);
                 }
 
                 if (statusChanged || runCountChanged)
@@ -1149,26 +1149,56 @@ namespace SANJET.Core.ViewModels
                 await StopAsync();
                 AutoStopOnTarget = false;
                 await PersistTargetRunCountSettingsAsync();
-
-                if (_lineNotificationService != null && _lineNotificationService.IsConfigured)
-                {
-                    var message = 
-                        $"✅ 目標次數完成通知\n\n" +
-                        $"設備：{Name}\n" +
-                        $"ESP32：{ControllingEsp32MqttId ?? "未設定"}\n" +
-                        $"Slave：{SlaveId}\n目前次數：{RunCount}\n" +
-                        $"目標次數：{TargetRunCount}";
-
-                    await _lineNotificationService.SendTextMessageAsync(message);
-                }
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "設備 '{DeviceName}' 自動停止或 LINE 通知失敗。", Name);
+                _logger?.LogError(ex, "設備 '{DeviceName}' 達目標自動停止失敗。", Name);
             }
             finally
             {
                 IsAutoStopping = false;
+            }
+        }
+
+        public async Task HandleTargetRunCountReachedAsync(int previousRunCount)
+        {
+            if (!TargetRunCount.HasValue)
+            {
+                return;
+            }
+
+            var targetRunCount = TargetRunCount.Value;
+            if (previousRunCount >= targetRunCount || RunCount < targetRunCount)
+            {
+                return;
+            }
+
+            await SendTargetRunCountReachedLineNotificationAsync(targetRunCount);
+            await HandleAutoStopOnTargetAsync();
+        }
+
+        private async Task SendTargetRunCountReachedLineNotificationAsync(int targetRunCount)
+        {
+            if (_lineNotificationService == null || !_lineNotificationService.IsConfigured)
+            {
+                return;
+            }
+
+            try
+            {
+                var message =
+                    $"✅ 目標次數完成通知\n\n" +
+                    $"設備：{Name}\n" +
+                    $"ESP32：{ControllingEsp32MqttId ?? "未設定"}\n" +
+                    $"Slave：{SlaveId}\n" +
+                    $"目前次數：{RunCount}\n" +
+                    $"目標次數：{targetRunCount}";
+
+                await _lineNotificationService.SendTextMessageAsync(message);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "設備 '{DeviceName}' 達到目標次數後 LINE 通知失敗。", Name);
             }
         }
 

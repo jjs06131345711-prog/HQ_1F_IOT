@@ -33,7 +33,7 @@
                                 CornerRadius="5">
                             <ScrollViewer x:Name="PART_ContentHost"
                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
-                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
+                                          HorizontalAlignment="Stretch"/>
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>
@@ -60,7 +60,7 @@
                                 CornerRadius="5">
                             <ScrollViewer x:Name="PART_ContentHost"
                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
-                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
+                                          HorizontalAlignment="Stretch"/>
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>
