@@ -718,6 +718,21 @@ namespace SANJET.Core.ViewModels
         }
     }
 
+    /// <summary>
+    /// 達目標次數時，自動停止處理的結果，用於組成不同的 LINE 通知內容。
+    /// 注意：這裡只能反映「停止命令是否成功送出」，設備是否真的停止、狀態何時更新，
+    /// 取決於下一次輪詢的讀取回應，兩者之間存在時間差，因此無法在此確認設備已實際停止。
+    /// </summary>
+    public enum AutoStopOutcome
+    {
+        /// <summary>未啟用達目標自動停止，或設備不在運轉中，無需送出停止命令。</summary>
+        NotApplicable,
+        /// <summary>已成功送出停止命令。</summary>
+        CommandSent,
+        /// <summary>已啟用自動停止，但停止命令發送失敗。</summary>
+        CommandFailed
+    }
+
     // DeviceViewModel 類別保持不變 (如先前提供)
     public partial class DeviceViewModel : ObservableObject
     {
@@ -949,15 +964,25 @@ namespace SANJET.Core.ViewModels
         [RelayCommand(CanExecute = nameof(CanStop))]
         private async Task StopAsync()
         {
+            await StopInternalAsync();
+        }
+
+        /// <summary>
+        /// 實際發送停止命令，並回報「命令是否成功送出」。
+        /// 注意：這只代表 MQTT 寫入命令已成功發布，設備是否真的停止、狀態何時更新，
+        /// 取決於下一次輪詢的讀取回應，兩者之間存在時間差。
+        /// </summary>
+        private async Task<bool> StopInternalAsync()
+        {
             if (_mainViewModel == null || string.IsNullOrEmpty(ControllingEsp32MqttId))
             {
                 MessageBox.Show("通訊服務或目標 ESP32 ID 未設定。", "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
+                return false;
             }
             if (SlaveId <= 0)
             {
                 MessageBox.Show("無效的 Slave ID。", "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
+                return false;
             }
 
             Status = "停止中...";
@@ -979,6 +1004,8 @@ namespace SANJET.Core.ViewModels
             {
                 Status = "停止命令發送失敗";
             }
+
+            return success;
         }
 
         [RelayCommand]
@@ -1130,29 +1157,37 @@ namespace SANJET.Core.ViewModels
             Status = AutoStopOnTarget ? "已啟用達目標自動停止" : "已停用達目標自動停止";
         }
 
-        public async Task HandleAutoStopOnTargetAsync()
+        public async Task<AutoStopOutcome> HandleAutoStopOnTargetAsync()
         {
             if (IsAutoStopping || !AutoStopOnTarget || !TargetRunCount.HasValue)
             {
-                return;
+                return AutoStopOutcome.NotApplicable;
             }
 
             if (RunCount < TargetRunCount.Value || !(Status == "運行中" || Status.Contains("啟動中")))
             {
-                return;
+                return AutoStopOutcome.NotApplicable;
             }
 
             IsAutoStopping = true;
             try
             {
                 _logger?.LogInformation("設備 '{DeviceName}' 已達目標次數 {TargetRunCount}，自動觸發停止。", Name, TargetRunCount.Value);
-                await StopAsync();
+                bool commandSent = await StopInternalAsync();
+
+                if (!commandSent)
+                {
+                    return AutoStopOutcome.CommandFailed;
+                }
+
                 AutoStopOnTarget = false;
                 await PersistTargetRunCountSettingsAsync();
+                return AutoStopOutcome.CommandSent;
             }
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "設備 '{DeviceName}' 達目標自動停止失敗。", Name);
+                return AutoStopOutcome.CommandFailed;
             }
             finally
             {
@@ -1173,11 +1208,13 @@ namespace SANJET.Core.ViewModels
                 return;
             }
 
-            await SendTargetRunCountReachedLineNotificationAsync(targetRunCount);
-            await HandleAutoStopOnTargetAsync();
+            // 先記錄是否啟用自動停止，因為自動停止成功後會被重置為 false。
+            var autoStopEnabled = AutoStopOnTarget;
+            var autoStopOutcome = await HandleAutoStopOnTargetAsync();
+            await SendTargetRunCountReachedLineNotificationAsync(targetRunCount, autoStopEnabled, autoStopOutcome);
         }
 
-        private async Task SendTargetRunCountReachedLineNotificationAsync(int targetRunCount)
+        private async Task SendTargetRunCountReachedLineNotificationAsync(int targetRunCount, bool autoStopEnabled, AutoStopOutcome autoStopOutcome)
         {
             if (_lineNotificationService == null || !_lineNotificationService.IsConfigured)
             {
@@ -1186,13 +1223,33 @@ namespace SANJET.Core.ViewModels
 
             try
             {
+                string title;
+                string autoStopStatusLine;
+
+                if (!autoStopEnabled)
+                {
+                    title = "✅ 目標次數完成通知";
+                    autoStopStatusLine = "達目標自動停止：未啟用，設備將持續運轉，請視需要手動停止。";
+                }
+                else if (autoStopOutcome == AutoStopOutcome.CommandFailed)
+                {
+                    title = "⚠️ 目標次數完成通知";
+                    autoStopStatusLine = "達目標自動停止：已啟用，但停止命令發送失敗，請手動停止設備！";
+                }
+                else
+                {
+                    title = "✅ 目標次數完成通知";
+                    autoStopStatusLine = "達目標自動停止：已啟用，已送出停止命令（設備實際停止狀態請至系統確認）。";
+                }
+
                 var message =
-                    $"✅ 目標次數完成通知\n\n" +
+                    $"{title}\n\n" +
                     $"設備：{Name}\n" +
                     $"ESP32：{ControllingEsp32MqttId ?? "未設定"}\n" +
                     $"Slave：{SlaveId}\n" +
                     $"目前次數：{RunCount}\n" +
-                    $"目標次數：{targetRunCount}";
+                    $"目標次數：{targetRunCount}\n" +
+                    autoStopStatusLine;
 
                 await _lineNotificationService.SendTextMessageAsync(message);
             }

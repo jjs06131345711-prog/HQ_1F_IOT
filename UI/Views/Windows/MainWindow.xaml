@@ -10,7 +10,7 @@
         Top="0"    
         Height="1080"
         Width="1920"
-        Title="SJ_SCADA_1.0.0" 
+        Title="Sanjet Scada"
         WindowStyle="SingleBorderWindow"  
         WindowState="Maximized">
 

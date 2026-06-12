@@ -21,6 +21,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <!-- 標題 -->
@@ -30,7 +31,7 @@
                        FontWeight="Bold"
                        Foreground="#222"/>
 
-                    <TextBlock Text="管理資料庫備份、RTSP 攝影機連線參數與串流畫質。"
+                    <TextBlock Text="管理資料庫備份、RTSP 攝影機連線參數、串流畫質與 LINE 通知。"
                        FontSize="14"
                        Foreground="#666"
                        Margin="0,6,0,0"/>
@@ -235,6 +236,60 @@
                                 </StackPanel>
                             </Border>
                         </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- LINE 通知設定 -->
+                <Border Grid.Row="3"
+                Background="White"
+                CornerRadius="12"
+                Padding="18"
+                Margin="0,18,0,0"
+                BorderBrush="#E2E8F0"
+                BorderThickness="1"
+                Opacity="0.8">
+
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,14">
+                            <StackPanel DockPanel.Dock="Left">
+                                <TextBlock Text="LINE 通知設定"
+                                   FontSize="18"
+                                   FontWeight="Bold"
+                                   Foreground="#1F2937"/>
+
+                                <TextBlock Text="設定設備故障時，透過 LINE 自動推播的目標聊天室。"
+                                   FontSize="13"
+                                   Foreground="#6B7280"
+                                   Margin="0,6,0,0"/>
+                            </StackPanel>
+
+                            <Button Content="儲存設定"
+                            DockPanel.Dock="Right"
+                            Width="110"
+                            Height="34"
+                            HorizontalAlignment="Right"
+                            Command="{Binding SaveLineSettingsCommand}"
+                            Background="#10B981"
+                            Foreground="White"
+                            BorderThickness="0"
+                            FontWeight="SemiBold"/>
+                        </DockPanel>
+
+                        <CheckBox Content="啟用 LINE 通知"
+                          IsChecked="{Binding LineNotifyEnabled}"
+                          FontWeight="SemiBold"
+                          Foreground="#374151"
+                          Margin="0,0,0,12"/>
+
+                        <TextBlock Text="目標聊天室名稱（每行一個）"
+                           Foreground="#374151"
+                           FontWeight="SemiBold"/>
+                        <TextBox Text="{Binding LineTargetChatNames, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         MinHeight="80"
+                         Margin="0,4,0,0"/>
                     </StackPanel>
                 </Border>
             </Grid>

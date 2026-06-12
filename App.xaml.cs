@@ -111,6 +111,8 @@ namespace SANJET
                             SendDelayMilliseconds = int.TryParse(lineAutoHotkeySection["SendDelayMilliseconds"], out var sendDelayMilliseconds) ? sendDelayMilliseconds : 300,
                             RestoreClipboard = !bool.TryParse(lineAutoHotkeySection["RestoreClipboard"], out var restoreClipboard) || restoreClipboard
                         };
+                        // 套用使用者在設定頁保存的覆寫值（Enabled / TargetChatNames），需在首次通知前生效。
+                        LineAutoHotkeySettingsStore.ApplyTo(lineAutoHotkeyOptions);
                         services.AddSingleton(lineAutoHotkeyOptions);
 
                         var faultNotificationSection = context.Configuration.GetSection("FaultNotification");

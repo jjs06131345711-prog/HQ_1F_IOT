@@ -3,9 +3,11 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
+using SANJET.Core.Configuration;
 using SANJET.Core.Interfaces;
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -16,6 +18,7 @@ namespace SANJET.Core.ViewModels
     {
         private readonly ILogger<SettingsPageViewModel> _logger;
         private readonly IDatabaseManagementService _dbManagementService;
+        private readonly LineAutoHotkeyOptions _lineAutoHotkeyOptions;
         private readonly string _rtspSettingsPath;
         private Action? _autoStartStreamAction;
 
@@ -52,10 +55,22 @@ namespace SANJET.Core.ViewModels
         [ObservableProperty]
         private string _rtspStreamPath2 = "stream1";
 
-        public SettingsPageViewModel(ILogger<SettingsPageViewModel> logger, IDatabaseManagementService dbManagementService)
+        // LINE 通知設定（對應 LineAutoHotkeyOptions 的 Enabled 與 TargetChatNames）
+        [ObservableProperty]
+        private bool _lineNotifyEnabled;
+
+        // 多行文字，每行一個聊天室名稱
+        [ObservableProperty]
+        private string _lineTargetChatNames = string.Empty;
+
+        public SettingsPageViewModel(
+            ILogger<SettingsPageViewModel> logger,
+            IDatabaseManagementService dbManagementService,
+            LineAutoHotkeyOptions lineAutoHotkeyOptions)
         {
             _logger = logger;
             _dbManagementService = dbManagementService;
+            _lineAutoHotkeyOptions = lineAutoHotkeyOptions;
             _rtspSettingsPath = Path.Combine(AppContext.BaseDirectory, "rtsp.settings.json");
             _logger.LogInformation("SettingsViewModel 已初始化。");
         }
@@ -63,6 +78,10 @@ namespace SANJET.Core.ViewModels
         public void LoadSettings()
         {
             _logger.LogInformation("正在加載設定值...");
+
+            // 從執行中的單例載入 LINE 通知設定（啟動時已套用使用者保存的覆寫值）。
+            LineNotifyEnabled = _lineAutoHotkeyOptions.Enabled;
+            LineTargetChatNames = string.Join(Environment.NewLine, _lineAutoHotkeyOptions.TargetChatNames ?? Array.Empty<string>());
 
             try
             {
@@ -178,6 +197,42 @@ namespace SANJET.Core.ViewModels
             {
                 _logger.LogError(ex, "儲存 RTSP 設定失敗。路徑: {Path}", _rtspSettingsPath);
                 MessageBox.Show($"儲存 RTSP 設定失敗：{ex.Message}", "儲存失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        [RelayCommand]
+        private void SaveLineSettings()
+        {
+            try
+            {
+                var chatNames = (LineTargetChatNames ?? string.Empty)
+                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(name => name.Trim())
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                // 立即套用到執行中的單例，讓通知服務下次發送即生效。
+                _lineAutoHotkeyOptions.Enabled = LineNotifyEnabled;
+                _lineAutoHotkeyOptions.TargetChatNames = chatNames;
+
+                // 持久化，重啟後保留。
+                LineAutoHotkeySettingsStore.Save(new LineAutoHotkeyUserSettings
+                {
+                    Enabled = LineNotifyEnabled,
+                    TargetChatNames = chatNames
+                });
+
+                // 正規化顯示（移除空行與重複）。
+                LineTargetChatNames = string.Join(Environment.NewLine, chatNames);
+
+                _logger.LogInformation("LINE 通知設定已儲存。Enabled: {Enabled}, 目標聊天室數: {Count}", LineNotifyEnabled, chatNames.Length);
+                MessageBox.Show("LINE 通知設定已儲存。", "儲存成功", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "儲存 LINE 通知設定失敗。");
+                MessageBox.Show($"儲存 LINE 通知設定失敗：{ex.Message}", "儲存失敗", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
