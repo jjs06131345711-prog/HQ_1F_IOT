@@ -6,7 +6,7 @@ namespace SANJET.Core.Configuration
 {
     /// <summary>
     /// 使用者可覆寫的 LINE AutoHotkey 通知設定，目前只保存 Enabled 與 TargetChatNames。
-    /// 此設定會覆蓋 appsettings.json 的預設值，並保存於執行目錄下的 JSON 檔案。
+    /// 此設定會覆蓋 appsettings.json 的預設值，並保存於使用者可寫入的 AppData JSON 檔案。
     /// </summary>
     public class LineAutoHotkeyUserSettings
     {
@@ -19,22 +19,33 @@ namespace SANJET.Core.Configuration
     /// </summary>
     public static class LineAutoHotkeySettingsStore
     {
-        private static string FilePath =>
+        private static string FilePath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Sanjet Scada",
+            "lineautohotkey.settings.json");
+
+        private static string LegacyFilePath =>
             Path.Combine(AppContext.BaseDirectory, "lineautohotkey.settings.json");
 
         /// <summary>
-        /// 讀取已保存的設定；若檔案不存在或讀取失敗，回傳 null 讓系統使用 appsettings.json 的預設值。
+        /// 讀取已保存的設定；先讀 AppData 新位置，再相容讀取舊版執行目錄設定檔。
         /// </summary>
         public static LineAutoHotkeyUserSettings? Load()
         {
             try
             {
-                if (!File.Exists(FilePath))
+                var path = File.Exists(FilePath)
+                    ? FilePath
+                    : File.Exists(LegacyFilePath)
+                        ? LegacyFilePath
+                        : null;
+
+                if (path is null)
                 {
                     return null;
                 }
 
-                var json = File.ReadAllText(FilePath);
+                var json = File.ReadAllText(path);
                 return JsonSerializer.Deserialize<LineAutoHotkeyUserSettings>(json);
             }
             catch
@@ -50,6 +61,7 @@ namespace SANJET.Core.Configuration
         public static void Save(LineAutoHotkeyUserSettings settings)
         {
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
             File.WriteAllText(FilePath, json);
         }
 

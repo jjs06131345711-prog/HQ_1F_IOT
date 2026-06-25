@@ -363,3 +363,6 @@ MigrationBackup/
 FodyWeavers.xsd
 /Claude.md
 /Installer/Output/
+
+# 臨時產出（簡報匯出、分析檔等）
+/outputs/

@@ -108,6 +108,7 @@ void reconnectMqtt();
 void publishOnlineStatus(bool retainFlag = true);
 bool mqttPublish(const char* topic, const char* payload, bool retained = false);
 bool mqttIsConnected();
+void flushModbusSerial();
 
 // ================================================================
 // 6. MQTT Topic 建立
@@ -583,6 +584,19 @@ void handleMqttSetLED(const char* payloadStr) {
 }
 
 // ================================================================
+// 17.5 清空 Modbus 序列接收緩衝
+// ================================================================
+// 用途：在每次 Modbus 交易前呼叫，清掉前一次交易（特別是逾時／無回應的離線
+//       從站）殘留在 Serial2 接收緩衝中的位元組。
+// 目的：避免這些殘留位元組被誤當成「下一個從站」的回應，導致相鄰的正常從站
+//       發生 CRC／框架錯誤而被誤判為通訊失敗（多台連坐的主要傳染途徑）。
+void flushModbusSerial() {
+  while (Serial2.available()) {
+    Serial2.read();
+  }
+}
+
+// ================================================================
 // 18. MQTT Modbus 讀取
 // ================================================================
 void handleMqttReadModbus(const char* payloadStr) {
@@ -636,6 +650,7 @@ void handleMqttReadModbus(const char* payloadStr) {
     response["Status"] = "error";
     response["Message"] = "quantity 必須介於 1 和 10 之間";
   } else {
+    flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次讀取
     node.begin(slaveId, Serial2);
     uint8_t result = 0xFF;
     uint16_t dataBuffer[10];
@@ -745,6 +760,7 @@ void handleMqttWriteModbus(const char* payloadStr) {
       return;
     }
 
+    flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次寫入
     node.begin(slaveId, Serial2);
 
     Serial.println("[Modbus寫入] 功能碼 16 多筆寫入, 起始位址 " + String(address) +
@@ -795,6 +811,7 @@ void handleMqttWriteModbus(const char* payloadStr) {
 
   uint16_t value = (int)request["value"];
 
+  flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次寫入
   node.begin(slaveId, Serial2);
   uint8_t result = 0xFF;
 

@@ -676,7 +676,7 @@ namespace SANJET.Core.Services
 
         private static async Task<(bool HadText, string? Text)> GetClipboardTextAsync(CancellationToken cancellationToken)
         {
-            return await RunOnUiThreadAsync(() =>
+            return await RunOnUiThreadAsync<(bool HadText, string? Text)>(() =>
             {
                 if (!Clipboard.ContainsText())
                 {

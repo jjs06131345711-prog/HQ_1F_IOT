@@ -24,14 +24,10 @@ namespace SANJET.Core.ViewModels
         {
             _authService = authService;
 
+            // 帳號與密碼預設留空，由使用者自行輸入
             Username = string.Empty;
             Password = string.Empty;
 
-            // 在這裡設定預設的帳號和密碼
-            Username = "user"; // 或 "admin", "user" 等您在 SeedData 中設定的帳號
-            Password = "0000"; // 對應的密碼
-
-            
             ErrorMessage = string.Empty;
 
             // Initialize events to avoid nullability warnings

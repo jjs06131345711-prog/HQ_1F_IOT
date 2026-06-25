@@ -75,6 +75,9 @@
     <None Update="appsettings.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
+    <None Update="導出模板\CP08-003-02版-產品測試記錄表.xlsx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="Sounds\start_music.mp3">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

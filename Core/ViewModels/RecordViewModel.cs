@@ -231,10 +231,9 @@ namespace SANJET.Core.ViewModels
                     worksheet.Cells[currentRow, 1].Value = displayItem.RowNumber; // A欄: 排序
                     worksheet.Cells[currentRow, 2].Value = record.Timestamp;
                     worksheet.Cells[currentRow, 2].Style.Numberformat.Format = "yyyy-mm-dd hh:mm:ss";
-                    worksheet.Cells[currentRow, 3].Value = record.DeviceName;
-                    worksheet.Cells[currentRow, 4].Value = record.RunCount;
-                    worksheet.Cells[currentRow, 5].Value = record.Content;
-                    worksheet.Cells[currentRow, 6].Value = record.Username;
+                    worksheet.Cells[currentRow, 3].Value = record.RunCount; // C欄: 次數
+                    worksheet.Cells[currentRow, 4].Value = record.Content; // D欄: 測試狀況
+                    worksheet.Cells[currentRow, 5].Value = record.Username; // E欄: 使用者
                     currentRow++;
                 }
 
@@ -244,13 +243,12 @@ namespace SANJET.Core.ViewModels
                 // 針對特定欄位自動調整欄寬
                 worksheet.Column(1).AutoFit(); // A欄 (排序)
                 worksheet.Column(2).AutoFit(); // B欄 (時間)
-                worksheet.Column(3).AutoFit(); // C欄 (機種)
-                worksheet.Column(4).AutoFit(); // D欄 (跑合)
-                worksheet.Column(6).AutoFit(); // F欄 (使用者)
+                worksheet.Column(3).AutoFit(); // C欄 (次數)
+                worksheet.Column(5).AutoFit(); // E欄 (使用者)
 
-                // 設定 E 欄 (測試狀況) 的格式
-                worksheet.Column(5).Width = 60; // 設定一個固定的寬度，例如 60
-                worksheet.Column(5).Style.WrapText = true; // 啟用該欄的自動換行功能
+                // 設定 D 欄 (測試狀況) 的格式
+                worksheet.Column(4).Width = 60; // 設定一個固定的寬度，例如 60
+                worksheet.Column(4).Style.WrapText = true; // 啟用該欄的自動換行功能
 
 
                 // **將修改後的模板內容另存為使用者指定的新檔案**

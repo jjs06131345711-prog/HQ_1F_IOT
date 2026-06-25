@@ -5,10 +5,12 @@ using Microsoft.Extensions.Logging;
 using SANJET.Core.Interfaces; // 新增
 using SANJET.Core.ViewModels;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using SANJET.Core;
+using SANJET.Core.Models;
 using Microsoft.EntityFrameworkCore;
 using SANJET.Core.Constants;
 
@@ -21,6 +23,23 @@ namespace SANJET.Core.Services
         private readonly IPollingStateService _pollingStateService; // 新增
         private readonly TimeSpan _pollingInterval = TimeSpan.FromSeconds(3);//--輪巡時間--// 預設為 3 秒
         private readonly ManualResetEventSlim _pollingSignal = new ManualResetEventSlim(false); // 新增，初始為未發信號
+
+        // ===== 離線退避（backoff）設定 =====
+        // 當某從站連續多次回報「通訊失敗」（通常代表設備被勾選啟用、但實際沒開機／離線）時，
+        // 不再每個輪詢週期都去撞它——每撞一次都會讓 ESP32 空等逾時、霸佔整條 RS485 匯流排，
+        // 並把其他正常從站的請求擠爆 ESP32 佇列。改為拉長間隔偶爾試探一次，
+        // 避免單一離線設備拖垮其他正常設備（多台連坐）。
+        private const int BackoffFailureThreshold = 3; // 連續通訊失敗達此次數即進入退避
+        private static readonly TimeSpan BackoffProbeInterval = TimeSpan.FromSeconds(30); // 退避期間的試探間隔
+        private readonly Dictionary<int, DeviceProbeState> _deviceProbeStates = new(); // key: device.Id
+
+        // 單一設備的退避狀態追蹤
+        private sealed class DeviceProbeState
+        {
+            public int ConsecutiveFailures; // 連續通訊失敗次數
+            public bool InBackoff;          // 是否已進入退避
+            public DateTime LastProbeUtc;   // 退避期間上次試探的時間
+        }
 
         public ModbusPollingService(ILogger<ModbusPollingService> logger,
                                     IServiceProvider serviceProvider,
@@ -128,6 +147,13 @@ namespace SANJET.Core.Services
                         }
                         else
                         {
+                            // 清理已不在輪詢清單中的設備退避狀態（例如已被停用或刪除），避免字典無限成長
+                            var currentDeviceIds = devicesToPoll.Select(d => d.Id).ToHashSet();
+                            foreach (var staleId in _deviceProbeStates.Keys.Where(k => !currentDeviceIds.Contains(k)).ToList())
+                            {
+                                _deviceProbeStates.Remove(staleId);
+                            }
+
                             foreach (var device in devicesToPoll)
                             {
                                 if (stoppingToken.IsCancellationRequested) break;
@@ -135,6 +161,12 @@ namespace SANJET.Core.Services
                                 if (string.IsNullOrEmpty(device.ControllingEsp32MqttId))
                                 {
                                     _logger.LogWarning("設備 ID {DbDeviceId} (Slave {SlaveId}) 缺少 ControllingEsp32MqttId，跳過輪詢。", device.Id, device.SlaveId);
+                                    continue;
+                                }
+
+                                // 離線退避判斷：疑似離線的設備本週期直接跳過，僅依間隔試探，避免拖垮其他設備
+                                if (!ShouldPollDevice(device))
+                                {
                                     continue;
                                 }
 
@@ -193,6 +225,69 @@ namespace SANJET.Core.Services
 
             _pollingStateService.PollingStateChanged -= OnPollingStateChanged; // 取消訂閱事件
             _logger.LogInformation("Modbus輪詢服務已停止。");
+        }
+
+        /// <summary>
+        /// 判斷本輪詢週期是否應對指定設備發送 Modbus 讀取命令，並維護其離線退避狀態。
+        /// </summary>
+        /// <param name="device">待評估的設備；其 Status 反映上一次輪詢的結果。</param>
+        /// <returns>true 表示本週期應輪詢；false 表示因退避而跳過。</returns>
+        /// <remarks>
+        /// 規則：
+        /// 1. 狀態非「通訊失敗」（正常回應或剛恢復）→ 清除退避狀態，正常輪詢。
+        /// 2. 連續「通訊失敗」未達門檻 → 仍正常輪詢，持續累計失敗次數以確認是否真的離線。
+        /// 3. 連續失敗達門檻後進入退避 → 僅每隔 <see cref="BackoffProbeInterval"/> 試探一次，其餘週期跳過。
+        /// </remarks>
+        private bool ShouldPollDevice(Device device)
+        {
+            bool isFailing = device.Status == "通訊失敗";
+
+            // 規則 1：狀態正常，清除任何既有退避狀態並正常輪詢
+            if (!isFailing)
+            {
+                if (_deviceProbeStates.Remove(device.Id))
+                {
+                    _logger.LogInformation("Modbus輪詢服務：設備 '{DeviceName}' (Slave {SlaveId}) 已恢復通訊，解除離線退避。",
+                        device.Name, device.SlaveId);
+                }
+                return true;
+            }
+
+            // 狀態為通訊失敗：取得或建立退避狀態
+            if (!_deviceProbeStates.TryGetValue(device.Id, out var state))
+            {
+                state = new DeviceProbeState();
+                _deviceProbeStates[device.Id] = state;
+            }
+
+            var now = DateTime.UtcNow;
+
+            // 規則 2：尚未進入退避，累計連續失敗次數
+            if (!state.InBackoff)
+            {
+                state.ConsecutiveFailures++;
+                if (state.ConsecutiveFailures >= BackoffFailureThreshold)
+                {
+                    state.InBackoff = true;
+                    state.LastProbeUtc = now;
+                    _logger.LogWarning("Modbus輪詢服務：設備 '{DeviceName}' (Slave {SlaveId}) 連續 {Count} 次通訊失敗，疑似離線，啟動退避（每 {Interval} 秒試探一次）。",
+                        device.Name, device.SlaveId, state.ConsecutiveFailures, BackoffProbeInterval.TotalSeconds);
+                    // 進入退避的當下這個週期先跳過，之後依間隔試探
+                    return false;
+                }
+                return true;
+            }
+
+            // 規則 3：已在退避中，僅在達到試探間隔時放行一次
+            if (now - state.LastProbeUtc >= BackoffProbeInterval)
+            {
+                state.LastProbeUtc = now;
+                _logger.LogInformation("Modbus輪詢服務：對退避中的設備 '{DeviceName}' (Slave {SlaveId}) 進行試探輪詢。",
+                    device.Name, device.SlaveId);
+                return true;
+            }
+
+            return false;
         }
 
         public override Task StopAsync(CancellationToken cancellationToken)
