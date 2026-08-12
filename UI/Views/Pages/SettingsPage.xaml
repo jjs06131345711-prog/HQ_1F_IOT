@@ -22,6 +22,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <!-- 標題 -->
@@ -31,7 +32,7 @@
                        FontWeight="Bold"
                        Foreground="#222"/>
 
-                    <TextBlock Text="管理資料庫備份、RTSP 攝影機連線參數、串流畫質與 LINE 通知。"
+                    <TextBlock Text="管理資料庫備份、RTSP 攝影機連線參數、串流畫質、LINE 通知與排程自動停止。"
                        FontSize="14"
                        Foreground="#666"
                        Margin="0,6,0,0"/>
@@ -290,6 +291,154 @@
                          VerticalScrollBarVisibility="Auto"
                          MinHeight="80"
                          Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 排程自動停止設定 -->
+                <Border Grid.Row="4"
+                Background="White"
+                CornerRadius="12"
+                Padding="18"
+                Margin="0,18,0,0"
+                BorderBrush="#E2E8F0"
+                BorderThickness="1"
+                Opacity="0.8">
+
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,14">
+                            <StackPanel DockPanel.Dock="Left">
+                                <TextBlock Text="排程自動停止"
+                                   FontSize="18"
+                                   FontWeight="Bold"
+                                   Foreground="#1F2937"/>
+
+                                <TextBlock Text="設定每天自動觸發「全部停止」的時間，可新增多組（24 小時制 HH:mm），並各自指定要停止的區域（全部／展機區／測試區）。"
+                                   TextWrapping="Wrap"
+                                   FontSize="13"
+                                   Foreground="#6B7280"
+                                   Margin="0,6,20,0"/>
+                            </StackPanel>
+
+                            <Button Content="儲存設定"
+                            DockPanel.Dock="Right"
+                            Width="110"
+                            Height="34"
+                            VerticalAlignment="Top"
+                            HorizontalAlignment="Right"
+                            Command="{Binding SaveScheduledStopSettingsCommand}"
+                            Background="#10B981"
+                            Foreground="White"
+                            BorderThickness="0"
+                            FontWeight="SemiBold"/>
+                        </DockPanel>
+
+                        <CheckBox Content="啟用排程自動停止"
+                          IsChecked="{Binding ScheduledStopEnabled}"
+                          FontWeight="SemiBold"
+                          Foreground="#374151"
+                          Margin="0,0,0,8"/>
+
+                        <CheckBox Content="觸發時發送 LINE 通知"
+                          IsChecked="{Binding ScheduledStopNotifyByLine}"
+                          FontWeight="SemiBold"
+                          Foreground="#374151"
+                          Margin="0,0,0,12"/>
+
+                        <TextBlock Text="排程時間"
+                           Foreground="#374151"
+                           FontWeight="SemiBold"
+                           Margin="0,0,0,6"/>
+
+                        <ItemsControl ItemsSource="{Binding ScheduledStopTimes}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#F8FAFC"
+                                    CornerRadius="8"
+                                    Padding="12,8"
+                                    Margin="0,0,0,8"
+                                    BorderBrush="#E5E7EB"
+                                    BorderThickness="1">
+
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Column="0"
+                                               Text="時間"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0"
+                                               Foreground="#374151"
+                                               FontWeight="SemiBold"/>
+
+                                            <TextBox Grid.Column="1"
+                                             Width="90"
+                                             Height="30"
+                                             VerticalContentAlignment="Center"
+                                             Text="{Binding Time, UpdateSourceTrigger=PropertyChanged}"/>
+
+                                            <TextBlock Grid.Column="2"
+                                               Text="停止區域"
+                                               VerticalAlignment="Center"
+                                               Margin="16,0,8,0"
+                                               Foreground="#374151"
+                                               FontWeight="SemiBold"/>
+
+                                            <ComboBox Grid.Column="3"
+                                              Width="110"
+                                              Height="30"
+                                              VerticalContentAlignment="Center"
+                                              SelectedValue="{Binding Area, Mode=TwoWay}"
+                                              SelectedValuePath="Tag">
+                                                <ComboBoxItem Content="全部" Tag="全部"/>
+                                                <ComboBoxItem Content="展機區" Tag="展機區"/>
+                                                <ComboBoxItem Content="測試區" Tag="測試區"/>
+                                            </ComboBox>
+
+                                            <CheckBox Grid.Column="4"
+                                              Content="啟用"
+                                              IsChecked="{Binding IsEnabled}"
+                                              VerticalAlignment="Center"
+                                              Margin="16,0,0,0"
+                                              Foreground="#374151"/>
+
+                                            <Button Grid.Column="5"
+                                            Content="刪除"
+                                            Width="70"
+                                            Height="30"
+                                            Command="{Binding DataContext.RemoveScheduledStopTimeCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding}"
+                                            Background="#EF4444"
+                                            Foreground="White"
+                                            BorderThickness="0"
+                                            FontWeight="SemiBold"/>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <Button Content="新增時間"
+                        Width="110"
+                        Height="32"
+                        HorizontalAlignment="Left"
+                        Margin="0,4,0,0"
+                        Command="{Binding AddScheduledStopTimeCommand}"
+                        Background="#2563EB"
+                        Foreground="White"
+                        BorderThickness="0"
+                        FontWeight="SemiBold"/>
+
+                        <TextBlock Text="※ 排程只在程式執行期間生效；程式關閉期間錯過的時間不會補觸發。"
+                           FontSize="12"
+                           Foreground="#9CA3AF"
+                           TextWrapping="Wrap"
+                           Margin="0,10,0,0"/>
                     </StackPanel>
                 </Border>
             </Grid>

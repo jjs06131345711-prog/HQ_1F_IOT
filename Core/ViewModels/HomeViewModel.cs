@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using SANJET.Core.Configuration;
 using SANJET.Core.Constants;
 using SANJET.Core.Interfaces;
 using SANJET.Core.Models;
@@ -278,6 +279,76 @@ namespace SANJET.Core.ViewModels
                     _logger.LogError(ex, "一鍵全部停止：設備 {DeviceName} 停止時發生例外。", device.Name);
                 }
             }
+        }
+
+        /// <summary>
+        /// 排程自動停止專用：對指定區域中目前可停止的設備發送停止命令。
+        /// 與畫面上的一鍵全部停止不同，此方法不顯示任何對話框（無人值守時不能被彈窗卡住），
+        /// 且停止範圍由排程設定決定，與目前畫面選取的區域無關。必須在 UI 執行緒上呼叫。
+        /// </summary>
+        /// <param name="triggerDescription">觸發來源描述（例如排程時間與區域），僅用於日誌與通知內容。</param>
+        /// <param name="areaScope">要停止的區域範圍：全部、展機區或測試區。</param>
+        /// <returns>
+        /// Total：嘗試停止的設備數；Succeeded：成功送出停止命令的設備數。
+        /// 注意：成功只代表命令已送出，設備是否真的停止仍需等下一次輪詢回報。
+        /// </returns>
+        public async Task<(int Total, int Succeeded)> StopAllDevicesForScheduleAsync(
+            string triggerDescription,
+            ScheduledStopAreaScope areaScope = ScheduledStopAreaScope.All)
+        {
+            // 若使用者尚未進入首頁（設備清單還沒載入），先載入一次，確保排程仍能運作。
+            if (!Devices.Any())
+            {
+                try
+                {
+                    await LoadDevicesAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "排程自動停止（{Trigger}）：載入設備清單失敗。", triggerDescription);
+                }
+            }
+
+            // 依排程設定的區域挑選候選設備；DisplayAreaDevices / TestAreaDevices 在載入時已分好。
+            var candidateDevices = areaScope switch
+            {
+                ScheduledStopAreaScope.DisplayArea => (IEnumerable<DeviceViewModel>)DisplayAreaDevices,
+                ScheduledStopAreaScope.TestArea => TestAreaDevices,
+                _ => Devices
+            };
+
+            var devicesToStop = candidateDevices
+                .Where(device => device.StopCommand.CanExecute(null))
+                .ToList();
+
+            if (!devicesToStop.Any())
+            {
+                _logger.LogInformation("排程自動停止（{Trigger}）：目前沒有運轉中的設備，不發送停止命令。", triggerDescription);
+                return (0, 0);
+            }
+
+            _logger.LogInformation("排程自動停止（{Trigger}）：準備停止 {Count} 台設備。", triggerDescription, devicesToStop.Count);
+
+            var succeeded = 0;
+            foreach (var device in devicesToStop)
+            {
+                try
+                {
+                    if (await device.RequestStopAsync())
+                    {
+                        succeeded++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "排程自動停止（{Trigger}）：設備 {DeviceName} 停止時發生例外。", triggerDescription, device.Name);
+                }
+            }
+
+            _logger.LogInformation("排程自動停止（{Trigger}）：共 {Total} 台設備，成功送出停止命令 {Succeeded} 台。",
+                                   triggerDescription, devicesToStop.Count, succeeded);
+
+            return (devicesToStop.Count, succeeded);
         }
 
         /// <summary>
@@ -968,20 +1039,44 @@ namespace SANJET.Core.ViewModels
         }
 
         /// <summary>
+        /// 供排程等自動流程呼叫的停止入口：不顯示錯誤對話框，避免無人值守時被彈窗卡住。
+        /// </summary>
+        /// <returns>停止命令是否成功送出。</returns>
+        public Task<bool> RequestStopAsync()
+        {
+            return StopInternalAsync(showErrorDialog: false);
+        }
+
+        /// <summary>
         /// 實際發送停止命令，並回報「命令是否成功送出」。
         /// 注意：這只代表 MQTT 寫入命令已成功發布，設備是否真的停止、狀態何時更新，
         /// 取決於下一次輪詢的讀取回應，兩者之間存在時間差。
         /// </summary>
-        private async Task<bool> StopInternalAsync()
+        /// <param name="showErrorDialog">參數錯誤時是否顯示對話框；自動觸發的流程請傳 false，只寫入日誌。</param>
+        private async Task<bool> StopInternalAsync(bool showErrorDialog = true)
         {
             if (_mainViewModel == null || string.IsNullOrEmpty(ControllingEsp32MqttId))
             {
-                MessageBox.Show("通訊服務或目標 ESP32 ID 未設定。", "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (showErrorDialog)
+                {
+                    MessageBox.Show("通訊服務或目標 ESP32 ID 未設定。", "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                else
+                {
+                    _logger?.LogError("設備 '{DeviceName}' 停止失敗：通訊服務或目標 ESP32 ID 未設定。", Name);
+                }
                 return false;
             }
             if (SlaveId <= 0)
             {
-                MessageBox.Show("無效的 Slave ID。", "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (showErrorDialog)
+                {
+                    MessageBox.Show("無效的 Slave ID。", "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                else
+                {
+                    _logger?.LogError("設備 '{DeviceName}' 停止失敗：無效的 Slave ID {SlaveId}。", Name, SlaveId);
+                }
                 return false;
             }
 

@@ -134,6 +134,26 @@ namespace SANJET
                         };
                         services.AddSingleton(faultNotificationOptions);
 
+                        // 排程自動停止：先讀 appsettings.json 的預設值，再套用使用者在設定頁保存的覆寫值。
+                        var scheduledStopSection = context.Configuration.GetSection("ScheduledStop");
+                        var scheduledStopOptions = new ScheduledStopOptions
+                        {
+                            Enabled = bool.TryParse(scheduledStopSection["Enabled"], out var scheduledStopEnabled) && scheduledStopEnabled,
+                            NotifyByLine = !bool.TryParse(scheduledStopSection["NotifyByLine"], out var scheduledStopNotifyByLine) || scheduledStopNotifyByLine,
+                            Times = scheduledStopSection.GetSection("Times")
+                                .GetChildren()
+                                .Select(child => new ScheduledStopTime
+                                {
+                                    Time = child["Time"] ?? string.Empty,
+                                    Area = ScheduledStopOptions.FormatArea(ScheduledStopOptions.ParseArea(child["Area"])),
+                                    Enabled = !bool.TryParse(child["Enabled"], out var timeEnabled) || timeEnabled
+                                })
+                                .Where(item => !string.IsNullOrWhiteSpace(item.Time))
+                                .ToList()
+                        };
+                        ScheduledStopSettingsStore.ApplyTo(scheduledStopOptions);
+                        services.AddSingleton(scheduledStopOptions);
+
                         // 將 SQLite 放在使用者 LocalAppData，避免安裝目錄沒有寫入權限導致啟動失敗。
                         var localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                         var appDataPath = Path.Combine(localAppDataPath, "SanjetScada");
@@ -175,6 +195,7 @@ namespace SANJET
 
                         services.AddHostedService<MqttClientConnectionService>();
                         services.AddHostedService<ModbusPollingService>();
+                        services.AddHostedService<ScheduledStopService>();
                     })
                     .Build();
 

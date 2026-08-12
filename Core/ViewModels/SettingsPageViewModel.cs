@@ -6,6 +6,8 @@ using Microsoft.Win32;
 using SANJET.Core.Configuration;
 using SANJET.Core.Interfaces;
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -19,6 +21,7 @@ namespace SANJET.Core.ViewModels
         private readonly ILogger<SettingsPageViewModel> _logger;
         private readonly IDatabaseManagementService _dbManagementService;
         private readonly LineAutoHotkeyOptions _lineAutoHotkeyOptions;
+        private readonly ScheduledStopOptions _scheduledStopOptions;
         private readonly string _rtspSettingsPath;
         private Action? _autoStartStreamAction;
 
@@ -63,14 +66,26 @@ namespace SANJET.Core.ViewModels
         [ObservableProperty]
         private string _lineTargetChatNames = string.Empty;
 
+        // 排程自動停止設定（對應 ScheduledStopOptions）
+        [ObservableProperty]
+        private bool _scheduledStopEnabled;
+
+        [ObservableProperty]
+        private bool _scheduledStopNotifyByLine = true;
+
+        /// <summary>排程自動停止的時間清單，可由使用者新增/刪除多組。</summary>
+        public ObservableCollection<ScheduledStopTimeViewModel> ScheduledStopTimes { get; } = new();
+
         public SettingsPageViewModel(
             ILogger<SettingsPageViewModel> logger,
             IDatabaseManagementService dbManagementService,
-            LineAutoHotkeyOptions lineAutoHotkeyOptions)
+            LineAutoHotkeyOptions lineAutoHotkeyOptions,
+            ScheduledStopOptions scheduledStopOptions)
         {
             _logger = logger;
             _dbManagementService = dbManagementService;
             _lineAutoHotkeyOptions = lineAutoHotkeyOptions;
+            _scheduledStopOptions = scheduledStopOptions;
             _rtspSettingsPath = Path.Combine(AppContext.BaseDirectory, "rtsp.settings.json");
             _logger.LogInformation("SettingsViewModel 已初始化。");
         }
@@ -82,6 +97,8 @@ namespace SANJET.Core.ViewModels
             // 從執行中的單例載入 LINE 通知設定（啟動時已套用使用者保存的覆寫值）。
             LineNotifyEnabled = _lineAutoHotkeyOptions.Enabled;
             LineTargetChatNames = string.Join(Environment.NewLine, _lineAutoHotkeyOptions.TargetChatNames ?? Array.Empty<string>());
+
+            LoadScheduledStopSettings();
 
             try
             {
@@ -233,6 +250,133 @@ namespace SANJET.Core.ViewModels
             {
                 _logger.LogError(ex, "儲存 LINE 通知設定失敗。");
                 MessageBox.Show($"儲存 LINE 通知設定失敗：{ex.Message}", "儲存失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>
+        /// 從執行中的 ScheduledStopOptions 單例載入排程自動停止設定到畫面。
+        /// </summary>
+        private void LoadScheduledStopSettings()
+        {
+            ScheduledStopEnabled = _scheduledStopOptions.Enabled;
+            ScheduledStopNotifyByLine = _scheduledStopOptions.NotifyByLine;
+
+            ScheduledStopTimes.Clear();
+            foreach (var item in _scheduledStopOptions.Times ?? new List<ScheduledStopTime>())
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                // 區域字串一律正規化，避免設定檔中的別名（例如 "展示區"）直接顯示在下拉選單上而選不到。
+                var areaName = ScheduledStopOptions.FormatArea(ScheduledStopOptions.ParseArea(item.Area));
+                ScheduledStopTimes.Add(new ScheduledStopTimeViewModel(item.Time ?? string.Empty, areaName, item.Enabled));
+            }
+        }
+
+        /// <summary>
+        /// 新增一組排程時間；預設帶入 18:00 且停止全部區域，使用者可再修改。
+        /// </summary>
+        [RelayCommand]
+        private void AddScheduledStopTime()
+        {
+            ScheduledStopTimes.Add(new ScheduledStopTimeViewModel("18:00", ScheduledStopOptions.AllAreaName, true));
+        }
+
+        /// <summary>
+        /// 刪除指定的排程時間列。
+        /// </summary>
+        /// <param name="item">要刪除的時間列（由清單的刪除按鈕傳入）。</param>
+        [RelayCommand]
+        private void RemoveScheduledStopTime(ScheduledStopTimeViewModel? item)
+        {
+            if (item == null)
+            {
+                return;
+            }
+
+            ScheduledStopTimes.Remove(item);
+        }
+
+        /// <summary>
+        /// 驗證並儲存排程自動停止設定：立即套用到執行中的單例，並持久化到使用者設定檔。
+        /// </summary>
+        [RelayCommand]
+        private void SaveScheduledStopSettings()
+        {
+            try
+            {
+                // 步驟 1：逐列驗證時間格式，任何一列有誤就中止儲存並提示使用者。
+                var parsedTimes = new List<ScheduledStopTime>();
+                foreach (var item in ScheduledStopTimes)
+                {
+                    if (!ScheduledStopOptions.TryParseTime(item.Time, out var parsed))
+                    {
+                        MessageBox.Show($"時間格式錯誤：「{item.Time}」\n\n請使用 24 小時制的 HH:mm 格式，例如 18:00。",
+                                        "輸入錯誤", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+
+                    parsedTimes.Add(new ScheduledStopTime
+                    {
+                        Time = ScheduledStopOptions.FormatTime(parsed),
+                        Area = ScheduledStopOptions.FormatArea(ScheduledStopOptions.ParseArea(item.Area)),
+                        Enabled = item.IsEnabled
+                    });
+                }
+
+                // 步驟 2：相同「時間 + 區域」只保留一筆（啟用優先），避免重複設定造成混淆。
+                var normalizedTimes = parsedTimes
+                    .GroupBy(item => (item.Time, item.Area))
+                    .Select(group => new ScheduledStopTime
+                    {
+                        Time = group.Key.Time,
+                        Area = group.Key.Area,
+                        Enabled = group.Any(item => item.Enabled)
+                    })
+                    .OrderBy(item => item.Time, StringComparer.Ordinal)
+                    .ThenBy(item => item.Area, StringComparer.Ordinal)
+                    .ToList();
+
+                // 步驟 3：整包替換 Times 參考（不就地增刪），背景排程服務讀取時才不會撞到集合被同時修改。
+                _scheduledStopOptions.Times = normalizedTimes;
+                _scheduledStopOptions.Enabled = ScheduledStopEnabled;
+                _scheduledStopOptions.NotifyByLine = ScheduledStopNotifyByLine;
+
+                // 步驟 4：持久化，重啟後保留。
+                ScheduledStopSettingsStore.Save(new ScheduledStopUserSettings
+                {
+                    Enabled = ScheduledStopEnabled,
+                    NotifyByLine = ScheduledStopNotifyByLine,
+                    Times = normalizedTimes
+                });
+
+                // 步驟 5：把正規化後的結果回寫畫面（統一格式、移除重複）。
+                ScheduledStopTimes.Clear();
+                foreach (var item in normalizedTimes)
+                {
+                    ScheduledStopTimes.Add(new ScheduledStopTimeViewModel(item.Time, item.Area, item.Enabled));
+                }
+
+                var enabledSchedulesText = string.Join("、", normalizedTimes
+                    .Where(t => t.Enabled)
+                    .Select(t => $"{t.Time}（{t.Area}）"));
+
+                _logger.LogInformation("排程自動停止設定已儲存。Enabled: {Enabled}, 啟用中的排程: {Schedules}",
+                                       ScheduledStopEnabled,
+                                       string.IsNullOrEmpty(enabledSchedulesText) ? "（無）" : enabledSchedulesText);
+
+                MessageBox.Show(
+                    ScheduledStopEnabled && normalizedTimes.Any(t => t.Enabled)
+                        ? $"排程自動停止設定已儲存。\n\n將於每天 {enabledSchedulesText} 自動停止對應區域中運轉中的設備。"
+                        : "排程自動停止設定已儲存。（目前未啟用任何排程時間）",
+                    "儲存成功", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "儲存排程自動停止設定失敗。");
+                MessageBox.Show($"儲存排程自動停止設定失敗：{ex.Message}", "儲存失敗", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
