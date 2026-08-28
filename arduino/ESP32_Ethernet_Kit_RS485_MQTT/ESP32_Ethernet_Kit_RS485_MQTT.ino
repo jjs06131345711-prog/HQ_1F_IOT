@@ -55,6 +55,13 @@ bool mqtt_connected = false;
 #define MQTT_QUEUE_LENGTH 40
 #define MQTT_PAYLOAD_MAX 384
 
+// 【請求時效】只要有從站離線，單筆請求最壞需 3 次 retry × 約 2 秒逾時 ≈ 6 秒，
+//   遠慢於 PC 每 500 ms 送一筆的速度，佇列必然積壓。積壓時若還照單全收地執行，
+//   PC 收到的會是好幾輪前的「過期回應」，UI 上就會看到狀態在正常／失敗之間跳動。
+//   因此超過此年齡的「讀取」請求直接丟棄不上匯流排（PC 下一輪本來就會重讀），
+//   把有限的 RS485 頻寬留給最新的請求。寫入是人為下達的命令，永遠不丟。
+#define REQUEST_MAX_AGE_MS 4000
+
 enum MqttRequestType {
   REQ_LED_SET = 1,
   REQ_MODBUS_READ = 2,
@@ -64,8 +71,13 @@ enum MqttRequestType {
 struct MqttRequestItem {
   MqttRequestType type;
   unsigned int length;
+  unsigned long enqueuedAt;          // 進入佇列的時間 (millis)，用於判斷是否已過期
   char payload[MQTT_PAYLOAD_MAX];
 };
+
+// 統計用：累計丟棄的過期／溢位請求數，方便從序列埠判斷積壓是否嚴重
+unsigned long droppedStaleCount = 0;
+unsigned long droppedOverflowCount = 0;
 
 QueueHandle_t mqttRequestQueue = NULL;
 SemaphoreHandle_t mqttMutex = NULL;
@@ -91,8 +103,17 @@ bool ota_started = false;
 #define MODBUS_SERIAL_BAUD 9600
 #define MAX_SLAVES 11
 
-#define MODBUS_TIMEOUT_MS 200
+// 【逾時說明】（已用 ModbusMaster 2.0.1 原始碼確認）
+//   ModbusMaster 不使用 Stream::setTimeout()，它的回應逾時寫死在標頭檔：
+//       static const uint16_t ku16MBResponseTimeout = 2000;  // ModbusMaster.h:252
+//   這是 static const 且「沒有任何 setter」，所以：
+//     1. Serial2.setTimeout() 對 Modbus 交易毫無作用；
+//     2. 無法在程式碼裡縮短，面對無回應的從站固定等 2 秒。
+//   唯一能改的方式是直接修改函式庫標頭檔，但函式庫一更新就會被覆蓋，不建議。
+//   → 目前改以 PC 端的三層防護吸收這個成本：離線退避、過期請求丟棄、回應看門狗。
+#define MODBUS_TIMEOUT_MS 200           // 僅作用於 Serial2 的 readBytes 等 API，不影響 Modbus
 #define MODBUS_RETRIES 3
+#define MODBUS_RETRY_GAP_MS 100         // retry 之間的靜默時間，讓上一次的遲到幀走完
 
 int Address_Offset = 7000;
 ModbusMaster node;
@@ -291,6 +312,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   memcpy(item.payload, payload, length);
   item.payload[length] = '\0';
   item.length = length;
+  item.enqueuedAt = millis();   // 記錄入列時間，供請求任務判斷是否已過期
 
   Serial.println(item.payload);
 
@@ -300,9 +322,24 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 
   BaseType_t ok = xQueueSend(mqttRequestQueue, &item, pdMS_TO_TICKS(5));
+
+  // 【溢位策略：丟舊留新】原本佇列滿時是丟棄「剛收到」的請求，等於永遠拿舊資料
+  //   去撞匯流排，積壓只會越來越嚴重。改為擠掉隊首最舊的一筆再放入新的，
+  //   確保 PC 最新送來的請求優先被執行。
   if (ok != pdTRUE) {
-    Serial.println("[MQTT] Queue 已滿，丟棄本次請求。請降低 PC 輪巡速度或改成收到 response 後再送下一筆");
-  } else {
+    MqttRequestItem discarded;
+    if (xQueueReceive(mqttRequestQueue, &discarded, 0) == pdTRUE) {
+      droppedOverflowCount++;
+      Serial.println("[MQTT] Queue 已滿，擠掉最舊的一筆請求以容納新請求（累計 " +
+                     String(droppedOverflowCount) + " 筆）");
+      ok = xQueueSend(mqttRequestQueue, &item, 0);
+    }
+    if (ok != pdTRUE) {
+      Serial.println("[MQTT] Queue 已滿且無法騰出空間，丟棄本次請求");
+    }
+  }
+
+  if (ok == pdTRUE) {
     UBaseType_t waiting = uxQueueMessagesWaiting(mqttRequestQueue);
     if (waiting > MQTT_QUEUE_LENGTH * 0.75) {
       Serial.println("[MQTT] Queue 接近滿載，目前等待筆數: " + String(waiting));
@@ -424,10 +461,16 @@ void setup() {
 
   Serial2.begin(MODBUS_SERIAL_BAUD, SERIAL_8N1, MODBUS_RX_PIN, MODBUS_TX_PIN);
   Serial2.setTimeout(MODBUS_TIMEOUT_MS);
+  // 【重要】上面這行不會影響 Modbus 逾時，ModbusMaster 只看自己內部的
+  //   ku16MBResponseTimeout（2000 ms，static const、無 setter）。
+  //   ModbusMaster 2.0.1 沒有 setResponseTimeout() 這個 API，不要嘗試呼叫，會編譯失敗。
 
   Serial.println("[Modbus] Serial2 已初始化");
   Serial.println("[Modbus] RX=" + String(MODBUS_RX_PIN) + ", TX=" + String(MODBUS_TX_PIN));
-  Serial.println("[Modbus] Timeout=" + String(MODBUS_TIMEOUT_MS) + " ms, Retries=" + String(MODBUS_RETRIES));
+  Serial.println("[Modbus] Serial2 Timeout=" + String(MODBUS_TIMEOUT_MS) + " ms (不影響 Modbus)"
+                 ", Modbus 回應逾時=函式庫預設約 2000 ms"
+                 ", Retries=" + String(MODBUS_RETRIES) +
+                 ", Retry 間隔=" + String(MODBUS_RETRY_GAP_MS) + " ms");
   Serial.println("[Modbus] ESP32-Ethernet-Kit V1.2 建議使用 GPIO32 / GPIO33，不建議使用 GPIO16 / GPIO17");
 
   client.setServer(mqtt_server, mqtt_port);
@@ -458,7 +501,8 @@ void setup() {
   );
   Serial.println("[主程式] MQTT 請求處理任務已創建");
 
-  Serial.printf("[主程式] 可用堆記憶體: %d bytes\n", ESP.getFreeHeap());
+  // ESP.getFreeHeap() 回傳 uint32_t，在此工具鏈等同 long unsigned int，故需用 %lu
+  Serial.printf("[主程式] 可用堆記憶體: %lu bytes\n", ESP.getFreeHeap());
 }
 
 // ================================================================
@@ -562,6 +606,18 @@ void mqttRequestTask(void *pvParameters) {
 
   for (;;) {
     if (xQueueReceive(mqttRequestQueue, &item, portMAX_DELAY) == pdTRUE) {
+      // 【過期請求處理】只丟棄過期的「讀取」請求：PC 每輪都會重讀，丟掉不會遺失資訊，
+      //   卻能立刻把積壓消化掉，讓後面較新的請求及時上匯流排。
+      //   寫入 (REQ_MODBUS_WRITE) 與 LED 設定是人為下達的命令，不論多舊都必須執行。
+      unsigned long age = millis() - item.enqueuedAt;
+      if (item.type == REQ_MODBUS_READ && age > REQUEST_MAX_AGE_MS) {
+        droppedStaleCount++;
+        Serial.println("[請求任務] 丟棄過期讀取請求 (已等待 " + String(age) + " ms，門檻 " +
+                       String(REQUEST_MAX_AGE_MS) + " ms，累計 " + String(droppedStaleCount) +
+                       " 筆，佇列剩餘 " + String((unsigned long)uxQueueMessagesWaiting(mqttRequestQueue)) + ")");
+        continue;   // 不上匯流排、不回覆；PC 端由回應逾時看門狗處理
+      }
+
       switch (item.type) {
         case REQ_LED_SET:
           handleMqttSetLED(item.payload);
@@ -624,8 +680,8 @@ void handleMqttSetLED(const char* payloadStr) {
 // ================================================================
 // 17.5 清空 Modbus 序列接收緩衝
 // ================================================================
-// 用途：在每次 Modbus 交易前呼叫，清掉前一次交易（特別是逾時／無回應的離線
-//       從站）殘留在 Serial2 接收緩衝中的位元組。
+// 用途：在每一次 Modbus 嘗試（含每次 retry）前呼叫，清掉前一次交易（特別是逾時／
+//       無回應的離線從站）殘留在 Serial2 接收緩衝中的位元組。
 // 目的：避免這些殘留位元組被誤當成「下一個從站」的回應，導致相鄰的正常從站
 //       發生 CRC／框架錯誤而被誤判為通訊失敗（多台連坐的主要傳染途徑）。
 void flushModbusSerial() {
@@ -688,7 +744,6 @@ void handleMqttReadModbus(const char* payloadStr) {
     response["Status"] = "error";
     response["Message"] = "quantity 必須介於 1 和 10 之間";
   } else {
-    flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次讀取
     node.begin(slaveId, Serial2);
     uint8_t result = 0xFF;
     uint16_t dataBuffer[10];
@@ -701,6 +756,14 @@ void handleMqttReadModbus(const char* payloadStr) {
 
     uint8_t retries = MODBUS_RETRIES;
     while (retries > 0) {
+      // 【每次嘗試前都必須清空】而不是只在迴圈外清一次。
+      // 原因：前一次逾時的從站，其「遲到」的回應位元組會殘留在 Serial2 接收緩衝中。
+      //       下一次 retry 一開始 available() 就為真，ModbusMaster 會把這些殘留當成
+      //       本次的回應去解析，必然得到 CRC 錯誤 (0xE3)，導致三次 retry 連坐全失敗，
+      //       PC 端因此誤判為「通訊失敗」，下一輪輪詢卻又正常 —— 即狀態反覆跳動的主因。
+      flushModbusSerial();
+      node.clearResponseBuffer();
+
       if (functionCode == 3) {
         result = node.readHoldingRegisters(modbusAddress, quantity);
       } else if (functionCode == 4) {
@@ -713,7 +776,11 @@ void handleMqttReadModbus(const char* payloadStr) {
 
       if (result == node.ku8MBSuccess) break;
       retries--;
-      delay(50);
+      if (retries > 0) {
+        Serial.println("[Modbus讀取] 第 " + String(MODBUS_RETRIES - retries) + " 次嘗試失敗，錯誤碼: 0x" +
+                       String(result, HEX) + "，" + String(MODBUS_RETRY_GAP_MS) + " ms 後重試");
+      }
+      delay(MODBUS_RETRY_GAP_MS); // 靜默等待，讓上一次的遲到幀完整走完再重試
     }
 
     if (result == node.ku8MBSuccess) {
@@ -798,7 +865,6 @@ void handleMqttWriteModbus(const char* payloadStr) {
       return;
     }
 
-    flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次寫入
     node.begin(slaveId, Serial2);
 
     Serial.println("[Modbus寫入] 功能碼 16 多筆寫入, 起始位址 " + String(address) +
@@ -817,6 +883,11 @@ void handleMqttWriteModbus(const char* payloadStr) {
     while (retries > 0) {
       Serial.println("[Modbus寫入] 嘗試功能碼 16 多筆寫入 (retry=" + String(MODBUS_RETRIES - retries) + ")");
 
+      // 每次嘗試前清空 RX 殘留與回應緩衝，理由同讀取路徑（避免遲到幀污染下一次 retry）。
+      // 注意：不可呼叫 clearTransmitBuffer()，否則會清掉上面 setTransmitBuffer() 準備好的資料。
+      flushModbusSerial();
+      node.clearResponseBuffer();
+
       result = node.writeMultipleRegisters(address, quantity);
 
       if (result == node.ku8MBSuccess) {
@@ -826,7 +897,7 @@ void handleMqttWriteModbus(const char* payloadStr) {
 
       Serial.println("[Modbus寫入] 功能碼 16 多筆寫入失敗，錯誤碼: 0x" + String(result, HEX));
       retries--;
-      delay(50);
+      delay(MODBUS_RETRY_GAP_MS);
     }
 
     response["SlaveId"] = slaveId;
@@ -849,7 +920,6 @@ void handleMqttWriteModbus(const char* payloadStr) {
 
   uint16_t value = (int)request["value"];
 
-  flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次寫入
   node.begin(slaveId, Serial2);
   uint8_t result = 0xFF;
 
@@ -859,10 +929,14 @@ void handleMqttWriteModbus(const char* payloadStr) {
 
   uint8_t retries = MODBUS_RETRIES;
   while (retries > 0) {
+    // 每次嘗試前清空 RX 殘留與回應緩衝，理由同讀取路徑
+    flushModbusSerial();
+    node.clearResponseBuffer();
+
     result = node.writeSingleRegister(address, value);
     if (result == node.ku8MBSuccess) break;
     retries--;
-    delay(50);
+    delay(MODBUS_RETRY_GAP_MS);
   }
 
   if (result == node.ku8MBSuccess) {

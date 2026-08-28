@@ -10,11 +10,11 @@
 // const char* ssid = "SJguest";
 // const char* password = "jetguest";
 
-const char* ssid = "SJ_3F";
-const char* password = "sanjet-5836";
+//const char* ssid = "SJ_3F";
+//const char* password = "sanjet-5836";
 
-// const char* ssid = "1F_IOT";
-// const char* password = "sanjet25653819";
+const char* ssid = "1F_IOT";
+const char* password = "sanjet25653819";
 
 const unsigned long WIFI_CONNECT_TIMEOUT = 15000;
 const unsigned long WIFI_RECONNECT_DELAY = 30000;
@@ -25,7 +25,7 @@ const unsigned long WIFI_STATUS_LOG_INTERVAL = 30000;
 // ================================================================
 #define DEVICE_ID "ESP32_TEST_RS485"
 
-const char* mqtt_server = "192.168.98.244";
+const char* mqtt_server = "192.168.50.138";
 const int mqtt_port = 1883;
 
 char mqtt_client_id[64];
@@ -85,9 +85,14 @@ bool ota_started = false;
 #define MODBUS_SERIAL_BAUD 9600
 #define MAX_SLAVES 11
 
-// 建議先使用較短 timeout，避免 Modbus 從站無回應時拖太久
-#define MODBUS_TIMEOUT_MS 200
+// 【逾時說明】ModbusMaster 不使用 Stream::setTimeout()，它有自己內部的回應逾時
+//   (ku16MBResponseTimeout，預設 2000 ms)。因此 Serial2.setTimeout() 對 Modbus
+//   交易毫無作用 —— 面對沒回應的從站，實際等待時間固定約 2 秒。
+//   只有函式庫有提供 node.setResponseTimeout() 時才能真正縮短（見 setup()）。
+#define MODBUS_TIMEOUT_MS 200           // 僅作用於 Serial2 的 readBytes 等 API，不影響 Modbus
+#define MODBUS_RESPONSE_TIMEOUT_MS 300  // 期望的 Modbus 回應逾時（需函式庫支援才會生效）
 #define MODBUS_RETRIES 3
+#define MODBUS_RETRY_GAP_MS 100         // retry 之間的靜默時間，讓上一次的遲到幀走完
 
 int Address_Offset = 7000;
 ModbusMaster node;
@@ -391,12 +396,18 @@ void setup() {
 
   Serial2.begin(MODBUS_SERIAL_BAUD, SERIAL_8N1, MODBUS_RX_PIN, MODBUS_TX_PIN);
   Serial2.setTimeout(MODBUS_TIMEOUT_MS);
-  // 你目前使用的 ModbusMaster 函式庫版本沒有 node.setTimeout()，因此不呼叫。
-  // Modbus timeout 先透過 Serial2.setTimeout() 與 MODBUS_RETRIES 控制。
+  // 【更正】原註解認為「Modbus timeout 透過 Serial2.setTimeout() 控制」是錯的。
+  //   ModbusMaster 只看自己內部的 ku16MBResponseTimeout（預設 2000 ms），
+  //   完全不理會 Stream::setTimeout()。若函式庫版本有提供下列 API，
+  //   取消註解才能真正把「無回應等待」從 2 秒縮短：
+  // node.setResponseTimeout(MODBUS_RESPONSE_TIMEOUT_MS);
 
   Serial.println("[Modbus] Serial2 已初始化");
   Serial.println("[Modbus] RX=" + String(MODBUS_RX_PIN) + ", TX=" + String(MODBUS_TX_PIN));
-  Serial.println("[Modbus] Serial Timeout=" + String(MODBUS_TIMEOUT_MS) + " ms, Retries=" + String(MODBUS_RETRIES));
+  Serial.println("[Modbus] Serial2 Timeout=" + String(MODBUS_TIMEOUT_MS) + " ms (不影響 Modbus)"
+                 ", Modbus 回應逾時=函式庫預設約 2000 ms"
+                 ", Retries=" + String(MODBUS_RETRIES) +
+                 ", Retry 間隔=" + String(MODBUS_RETRY_GAP_MS) + " ms");
 
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
@@ -586,8 +597,8 @@ void handleMqttSetLED(const char* payloadStr) {
 // ================================================================
 // 17.5 清空 Modbus 序列接收緩衝
 // ================================================================
-// 用途：在每次 Modbus 交易前呼叫，清掉前一次交易（特別是逾時／無回應的離線
-//       從站）殘留在 Serial2 接收緩衝中的位元組。
+// 用途：在每一次 Modbus 嘗試（含每次 retry）前呼叫，清掉前一次交易（特別是逾時／
+//       無回應的離線從站）殘留在 Serial2 接收緩衝中的位元組。
 // 目的：避免這些殘留位元組被誤當成「下一個從站」的回應，導致相鄰的正常從站
 //       發生 CRC／框架錯誤而被誤判為通訊失敗（多台連坐的主要傳染途徑）。
 void flushModbusSerial() {
@@ -650,7 +661,6 @@ void handleMqttReadModbus(const char* payloadStr) {
     response["Status"] = "error";
     response["Message"] = "quantity 必須介於 1 和 10 之間";
   } else {
-    flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次讀取
     node.begin(slaveId, Serial2);
     uint8_t result = 0xFF;
     uint16_t dataBuffer[10];
@@ -663,6 +673,14 @@ void handleMqttReadModbus(const char* payloadStr) {
 
     uint8_t retries = MODBUS_RETRIES;
     while (retries > 0) {
+      // 【每次嘗試前都必須清空】而不是只在迴圈外清一次。
+      // 原因：前一次逾時的從站，其「遲到」的回應位元組會殘留在 Serial2 接收緩衝中。
+      //       下一次 retry 一開始 available() 就為真，ModbusMaster 會把這些殘留當成
+      //       本次的回應去解析，必然得到 CRC 錯誤 (0xE3)，導致三次 retry 連坐全失敗，
+      //       PC 端因此誤判為「通訊失敗」，下一輪輪詢卻又正常 —— 即狀態反覆跳動的主因。
+      flushModbusSerial();
+      node.clearResponseBuffer();
+
       if (functionCode == 3) {
         result = node.readHoldingRegisters(modbusAddress, quantity);
       } else if (functionCode == 4) {
@@ -675,7 +693,11 @@ void handleMqttReadModbus(const char* payloadStr) {
 
       if (result == node.ku8MBSuccess) break;
       retries--;
-      delay(50);
+      if (retries > 0) {
+        Serial.println("[Modbus讀取] 第 " + String(MODBUS_RETRIES - retries) + " 次嘗試失敗，錯誤碼: 0x" +
+                       String(result, HEX) + "，" + String(MODBUS_RETRY_GAP_MS) + " ms 後重試");
+      }
+      delay(MODBUS_RETRY_GAP_MS); // 靜默等待，讓上一次的遲到幀完整走完再重試
     }
 
     if (result == node.ku8MBSuccess) {
@@ -760,7 +782,6 @@ void handleMqttWriteModbus(const char* payloadStr) {
       return;
     }
 
-    flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次寫入
     node.begin(slaveId, Serial2);
 
     Serial.println("[Modbus寫入] 功能碼 16 多筆寫入, 起始位址 " + String(address) +
@@ -779,6 +800,11 @@ void handleMqttWriteModbus(const char* payloadStr) {
     while (retries > 0) {
       Serial.println("[Modbus寫入] 嘗試功能碼 16 多筆寫入 (retry=" + String(MODBUS_RETRIES - retries) + ")");
 
+      // 每次嘗試前清空 RX 殘留與回應緩衝，理由同讀取路徑（避免遲到幀污染下一次 retry）。
+      // 注意：不可呼叫 clearTransmitBuffer()，否則會清掉上面 setTransmitBuffer() 準備好的資料。
+      flushModbusSerial();
+      node.clearResponseBuffer();
+
       result = node.writeMultipleRegisters(address, quantity);
 
       if (result == node.ku8MBSuccess) {
@@ -788,7 +814,7 @@ void handleMqttWriteModbus(const char* payloadStr) {
 
       Serial.println("[Modbus寫入] 功能碼 16 多筆寫入失敗，錯誤碼: 0x" + String(result, HEX));
       retries--;
-      delay(50);
+      delay(MODBUS_RETRY_GAP_MS);
     }
 
     response["SlaveId"] = slaveId;
@@ -811,7 +837,6 @@ void handleMqttWriteModbus(const char* payloadStr) {
 
   uint16_t value = (int)request["value"];
 
-  flushModbusSerial(); // 交易前清空殘留位元組，避免污染本次寫入
   node.begin(slaveId, Serial2);
   uint8_t result = 0xFF;
 
@@ -821,10 +846,14 @@ void handleMqttWriteModbus(const char* payloadStr) {
 
   uint8_t retries = MODBUS_RETRIES;
   while (retries > 0) {
+    // 每次嘗試前清空 RX 殘留與回應緩衝，理由同讀取路徑
+    flushModbusSerial();
+    node.clearResponseBuffer();
+
     result = node.writeSingleRegister(address, value);
     if (result == node.ku8MBSuccess) break;
     retries--;
-    delay(50);
+    delay(MODBUS_RETRY_GAP_MS);
   }
 
   if (result == node.ku8MBSuccess) {
