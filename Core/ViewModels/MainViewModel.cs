@@ -11,6 +11,7 @@ using SANJET.Core.Services; // For MqttService concrete type check
 using SANJET.UI.Views.Pages; // For HomePage and Settings page
 using SANJET.UI.Views.Windows; // For LoginWindow
 using System; // 新增
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Linq; // 新增
 using System.Text;
@@ -70,6 +71,54 @@ namespace SANJET.Core.ViewModels
         private Frame? _mainContentFrame;
         private bool _isFrameInitialized; // 追蹤 Frame 是否就緒
         private bool _isDisposed = false;
+
+        // ===== 通訊健康度追蹤（去彈跳 + 回應看門狗） =====
+        // 背景：RS485 在工廠環境偶爾吃到一次干擾是常態。原本只要 ESP32 回一次 error
+        //   就立刻把設備標記為「通訊失敗」並發 LINE 通知，導致 UI 狀態頻繁跳動、
+        //   告警訊息灌爆。改為必須「連續」失敗達門檻才判定，單次雜訊會被吸收掉。
+        // 注意：MainViewModel 註冊為 Singleton，此字典為全應用程式共用的狀態。
+        private const int CommFailureThreshold = 3; // 連續失敗達此次數才判定為通訊失敗
+        private readonly ConcurrentDictionary<int, CommHealth> _commHealth = new(); // key: Device.Id
+
+        /// <summary>
+        /// 單一設備的通訊健康度。ConsecutiveFailures 供去彈跳判斷，
+        /// LastResponseUtc 供輪詢服務的回應看門狗判斷「請求是否石沉大海」。
+        /// </summary>
+        private sealed class CommHealth
+        {
+            public int ConsecutiveFailures;
+            public DateTime LastResponseUtc = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// 取得指定設備距離上一次「收到任何 Modbus 回應」經過的時間。
+        /// </summary>
+        /// <param name="deviceId">資料庫中的 Device.Id。</param>
+        /// <returns>經過的時間；若從未收過該設備的回應則回傳 null。</returns>
+        /// <remarks>
+        /// 用途：ESP32 端會丟棄積壓過久的讀取請求（避免過期資料佔用 RS485 匯流排），
+        ///   被丟棄的請求不會有任何回應。若沒有這個看門狗，該設備的狀態會永遠停在
+        ///   舊值（例如顯示「運轉中」但其實早已斷線）。
+        /// </remarks>
+        public TimeSpan? GetTimeSinceLastResponse(int deviceId)
+        {
+            if (_commHealth.TryGetValue(deviceId, out var health))
+            {
+                return DateTime.UtcNow - health.LastResponseUtc;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 由輪詢服務在看門狗判定逾時後呼叫，重設該設備的健康度計數，
+        /// 避免逾時狀態一直重複觸發通知。
+        /// </summary>
+        public void ResetCommHealth(int deviceId)
+        {
+            var health = _commHealth.GetOrAdd(deviceId, _ => new CommHealth());
+            health.ConsecutiveFailures = 0;
+            health.LastResponseUtc = DateTime.UtcNow;
+        }
 
         [ObservableProperty]
         private string? _currentUser;
@@ -301,8 +350,16 @@ namespace SANJET.Core.ViewModels
                                     return;
                                 }
 
+                                // 只要收到回應（不論成功或失敗）就更新「最後回應時間」，
+                                // 供輪詢服務的看門狗判斷請求是否被 ESP32 丟棄而石沉大海。
+                                var commHealth = _commHealth.GetOrAdd(deviceInDb.Id, _ => new CommHealth());
+                                commHealth.LastResponseUtc = DateTime.UtcNow;
+
                                 if (responseData.Status?.ToLower() == "success" && responseData.Data != null)
                                 {
+                                    // 成功即歸零連續失敗計數
+                                    commHealth.ConsecutiveFailures = 0;
+
                                     var addressMap = ModbusAddressMapping.GetMap(deviceInDb.Area, deviceInDb.ModbusDeviceIndex);
                                     if (responseData.Address == addressMap.StatusAddress && responseData.Quantity == 1 && responseData.Data.Length >= 1)
                                     {
@@ -354,9 +411,20 @@ namespace SANJET.Core.ViewModels
                                 }
                                 else if (responseData.Status?.ToLower() == "error")
                                 {
-                                    _logger.LogError("Modbus 讀取失敗 (ESP32: {Esp32Id}, Slave: {SlaveId}, Addr: {Addr}, Qty: {Qty}): {Message}",
-                                                     responseData.DeviceId, responseData.SlaveId, responseData.Address, responseData.Quantity, responseData.Message);
-                                    if (deviceInDb.Status != "通訊失敗")
+                                    // 【去彈跳】累計連續失敗次數，未達門檻前不改變狀態、不發告警。
+                                    // 這樣單次匯流排干擾造成的偶發錯誤不會讓 UI 閃爍或誤發 LINE 通知。
+                                    commHealth.ConsecutiveFailures++;
+
+                                    _logger.LogError("Modbus 讀取失敗 (ESP32: {Esp32Id}, Slave: {SlaveId}, Addr: {Addr}, Qty: {Qty}, 連續第 {Count}/{Threshold} 次): {Message}",
+                                                     responseData.DeviceId, responseData.SlaveId, responseData.Address, responseData.Quantity,
+                                                     commHealth.ConsecutiveFailures, CommFailureThreshold, responseData.Message);
+
+                                    if (commHealth.ConsecutiveFailures < CommFailureThreshold)
+                                    {
+                                        _logger.LogInformation("設備 '{DeviceName}' (Slave {SlaveId}) 連續失敗尚未達門檻 {Threshold}，維持原狀態 '{Status}' 不變更。",
+                                                               deviceInDb.Name, responseData.SlaveId, CommFailureThreshold, deviceInDb.Status);
+                                    }
+                                    else if (deviceInDb.Status != "通訊失敗")
                                     {
                                         _logger.LogInformation("資料庫更新 (嘗試): ESP32 {Esp32Id}, Slave {SlaveId} - 由於讀取錯誤，狀態變為 '通訊失敗'。", responseData.DeviceId, responseData.SlaveId);
                                         var oldDeviceStatus = deviceInDb.Status;

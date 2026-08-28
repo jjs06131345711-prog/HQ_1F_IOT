@@ -21,6 +21,7 @@ namespace SANJET.Core.Services
         private readonly ILogger<ModbusPollingService> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly IPollingStateService _pollingStateService; // 新增
+        private readonly IFaultNotificationService _faultNotificationService; // 供回應看門狗發出故障通知
         private readonly TimeSpan _pollingInterval = TimeSpan.FromSeconds(3);//--輪巡時間--// 預設為 3 秒
         private readonly ManualResetEventSlim _pollingSignal = new ManualResetEventSlim(false); // 新增，初始為未發信號
 
@@ -43,11 +44,13 @@ namespace SANJET.Core.Services
 
         public ModbusPollingService(ILogger<ModbusPollingService> logger,
                                     IServiceProvider serviceProvider,
-                                    IPollingStateService pollingStateService) // 新增注入
+                                    IPollingStateService pollingStateService, // 新增注入
+                                    IFaultNotificationService faultNotificationService)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _pollingStateService = pollingStateService; // 儲存注入的服務
+            _faultNotificationService = faultNotificationService;
 
             // 訂閱狀態變更事件
             _pollingStateService.PollingStateChanged += OnPollingStateChanged;
@@ -196,6 +199,9 @@ namespace SANJET.Core.Services
                                 );
                                 await Task.Delay(TimeSpan.FromMilliseconds(500), stoppingToken);
                             }
+
+                            // 輪詢一輪結束後執行回應看門狗
+                            await RunResponseWatchdogAsync(dbContext, mainViewModel, devicesToPoll, stoppingToken);
                         }
                     }
 
@@ -225,6 +231,73 @@ namespace SANJET.Core.Services
 
             _pollingStateService.PollingStateChanged -= OnPollingStateChanged; // 取消訂閱事件
             _logger.LogInformation("Modbus輪詢服務已停止。");
+        }
+
+        /// <summary>
+        /// 回應看門狗：找出「送了請求卻長時間收不到任何回應」的設備，將其標記為通訊失敗。
+        /// </summary>
+        /// <param name="dbContext">本週期的資料庫內容。</param>
+        /// <param name="mainViewModel">持有各設備最後回應時間的單例。</param>
+        /// <param name="devicesToPoll">本週期的輪詢清單。</param>
+        /// <param name="stoppingToken">取消權杖。</param>
+        /// <remarks>
+        /// 為什麼需要：ESP32 端在佇列積壓時會丟棄過期的讀取請求（避免用過期資料佔用
+        ///   RS485 匯流排），被丟棄的請求不會有任何回應。若沒有這道看門狗，該設備的
+        ///   狀態會永遠停在最後一次成功的舊值 —— 明明已經斷線，UI 卻還顯示「運轉中」，
+        ///   比顯示「通訊失敗」更危險。
+        /// 門檻取「一輪預估時間 × 3」且不低於 45 秒，確保正常節奏下絕不會誤判。
+        /// </remarks>
+        private async Task RunResponseWatchdogAsync(AppDbContext dbContext,
+                                                    MainViewModel mainViewModel,
+                                                    List<Device> devicesToPoll,
+                                                    CancellationToken stoppingToken)
+        {
+            // 一輪預估耗時：每台 2 筆請求、每筆間隔 500ms，再加上週期間的等待
+            var roundEstimate = TimeSpan.FromMilliseconds(devicesToPoll.Count * 2 * 500) + _pollingInterval;
+            var threshold = TimeSpan.FromTicks(roundEstimate.Ticks * 3);
+            if (threshold < TimeSpan.FromSeconds(45))
+            {
+                threshold = TimeSpan.FromSeconds(45);
+            }
+
+            bool anyChanged = false;
+
+            foreach (var device in devicesToPoll)
+            {
+                if (stoppingToken.IsCancellationRequested) break;
+
+                // 已經是通訊失敗就不必重複判定；退避中的設備本來就少送請求，交由既有邏輯處理
+                if (device.Status == "通訊失敗") continue;
+
+                var since = mainViewModel.GetTimeSinceLastResponse(device.Id);
+
+                // null 代表本次程式啟動後從未收過該設備的回應。此時無法區分「剛啟動還沒輪到」
+                // 與「真的沒回應」，故不處理，等收到第一筆回應後才納入看門狗管轄。
+                if (since == null) continue;
+
+                if (since.Value > threshold)
+                {
+                    _logger.LogWarning("回應看門狗：設備 '{DeviceName}' (Slave {SlaveId}) 已 {Seconds:F0} 秒未收到任何 Modbus 回應（門檻 {Threshold:F0} 秒），判定為通訊失敗。",
+                        device.Name, device.SlaveId, since.Value.TotalSeconds, threshold.TotalSeconds);
+
+                    var oldStatus = device.Status;
+                    device.Status = "通訊失敗";
+                    device.Timestamp = DateTime.UtcNow;
+                    anyChanged = true;
+
+                    // 與 MainViewModel 的 error 路徑保持一致，同樣發出故障通知，
+                    // 否則會出現「UI 顯示通訊失敗但沒收到 LINE 告警」的落差。
+                    await _faultNotificationService.NotifyStatusChangedAsync(device, oldStatus, device.Status, DateTime.Now, stoppingToken);
+
+                    // 重設健康度，避免下一週期立刻又以同樣理由重複觸發
+                    mainViewModel.ResetCommHealth(device.Id);
+                }
+            }
+
+            if (anyChanged)
+            {
+                await dbContext.SaveChangesAsync(stoppingToken);
+            }
         }
 
         /// <summary>
