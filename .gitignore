@@ -366,3 +366,9 @@ FodyWeavers.xsd
 
 # 臨時產出（簡報匯出、分析檔等）
 /outputs/
+
+# Arduino / arduino-cli 編譯輸出
+arduino/**/build/
+arduino/**/*.bin
+arduino/**/*.elf
+arduino/**/*.map

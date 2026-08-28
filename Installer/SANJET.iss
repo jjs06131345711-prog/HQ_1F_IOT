@@ -8,7 +8,7 @@
 ;   3. 輸出檔位於 Installer\Output\SANJET-Setup-<版本>.exe
 
 #define MyAppName "Sanjet Scada"
-#define MyAppVersion "2.1.0"
+#define MyAppVersion "2.2.0"
 #define MyAppPublisher "SANJET"
 #define MyAppExeName "SANJET.exe"
 #define MyPublishDir "..\publish\win-x64"

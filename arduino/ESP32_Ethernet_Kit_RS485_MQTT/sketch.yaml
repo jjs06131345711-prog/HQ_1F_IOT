@@ -1,0 +1,9 @@
+# arduino-cli 專案設定
+# 有這個檔案後，在本資料夾直接執行 `arduino-cli compile` 即可，不必每次加 -b 參數。
+#
+# 開發板：ESP32-Ethernet-Kit-A V1.2（模組為 ESP32-WROVER-E，故選 esp32wrover）
+default_fqbn: esp32:esp32:esp32wrover
+
+# 燒錄用的序列埠。實際的埠號每台電腦不同，
+# 可用 `arduino-cli board list` 查詢後改這裡，或在 upload 時用 -p 覆蓋。
+# default_port: COM3
